@@ -1,0 +1,13 @@
+node_modules/
+.env
+.expo/
+dist/
+android/
+ios/
+*.log
+
+# Claude / agentes de IA
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+AGENTS.md

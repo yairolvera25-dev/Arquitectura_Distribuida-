@@ -1,0 +1,49 @@
+{
+  "expo": {
+    "name": "Clima Distribuido",
+    "slug": "clima-distribuido",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "package": "mx.edu.upp.climadistribuido"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "La app usa tu ubicación para consultar el clima."
+        }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "La app usa el micrófono para escuchar el comando de voz.",
+          "speechRecognitionPermission": "La app usa el reconocimiento de voz para interpretar el comando."
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
+    ]
+  }
+}

@@ -87,7 +87,9 @@ server-linux/           Servicio web del Servidor 2 (Ubuntu Server + PostgreSQL)
     db/
     middleware/
   sql/
-docs/                   Diagrama de arquitectura y reporte PDF
+docs/                   Documentación y reporte PDF
+  pasos-cliente.md      Pasos para conectar la app con los dos servidores
+  probar-servidores.sh  Diagnóstico: ¿están listos los servidores?
 ```
 
 ## Cliente: instalación y ejecución
@@ -260,7 +262,16 @@ Al terminar imprime la respuesta de `/api/salud`. Si dice
 
 ### Verificar desde el cliente
 
-Con ZeroTier conectado:
+Lo más rápido es el diagnóstico, que revisa ZeroTier, los dos servicios y si la
+API key sirve en ambos:
+
+```bash
+bash docs/probar-servidores.sh
+```
+
+Los pasos para conectar la app están en [`docs/pasos-cliente.md`](docs/pasos-cliente.md).
+
+A mano, con ZeroTier conectado:
 
 ```bash
 curl http://10.191.84.109:3000/api/salud   # {"ok":true,"servidor":"windows","baseDeDatos":"conectada"}

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 
 import type { ServidorId } from '../../config';
+import { bitacora, iniciarOrden, terminarOrden } from '../../data/services/bitacora';
 import { despuesDeLaPalabraClave, interpretarComando, ordenDeGuardar } from '../../data/services/comandos';
 import { hablarComoBarbie, prepararVoz } from '../vozBarbie';
 
@@ -130,7 +131,8 @@ export function useEscuchaContinua({ onGuardar, onPreguntar }: Opciones) {
   );
 
   const guardar = useCallback(
-    async (servidor: ServidorId) => {
+    /** `texto`: lo que se dijo; sin él, la orden vino del botón del servidor. */
+    async (servidor: ServidorId, texto?: string) => {
       if (ocupado.current) return;
       ocupado.current = true;
       desactivar();
@@ -139,6 +141,13 @@ export function useEscuchaContinua({ onGuardar, onPreguntar }: Opciones) {
       // Responde en cuanto entiende el comando, mientras guarda en paralelo,
       // para que no se sienta lenta aunque el servidor tarde.
       const numero = servidor === 'windows' ? 'uno' : 'dos';
+      if (texto) {
+        iniciarOrden(texto);
+        bitacora.exito('voz', 'Comando reconocido', { detalle: texto });
+      } else {
+        iniciarOrden(`Botón: guardar en el servidor ${numero}`);
+      }
+      bitacora.info('barbie', `Guardar todo en el servidor ${numero}`);
       const aviso = decir(`¡Claro! Guardando en el servidor ${numero}.`, { reanudar: false });
 
       let respuesta: string;
@@ -151,6 +160,8 @@ export function useEscuchaContinua({ onGuardar, onPreguntar }: Opciones) {
 
       setTranscripcion('');
       setEstado(habilitado.current ? 'esperando' : 'apagado');
+      bitacora.info('barbie', `Barbie: «${respuesta}»`);
+      terminarOrden();
       await decir(respuesta);
       ocupado.current = false;
     },
@@ -164,6 +175,8 @@ export function useEscuchaContinua({ onGuardar, onPreguntar }: Opciones) {
       ocupado.current = true;
       desactivar();
       setEstado('procesando');
+      iniciarOrden(texto);
+      bitacora.exito('voz', 'Frase reconocida', { detalle: texto });
 
       let respuesta: string;
       try {
@@ -172,6 +185,7 @@ export function useEscuchaContinua({ onGuardar, onPreguntar }: Opciones) {
         // Sin Gemini (sin internet, sin cuota…) la orden directa de guardar sigue funcionando.
         const servidor = ordenDeGuardar(texto);
         if (servidor) {
+          bitacora.aviso('barbie', 'Gemini falló; se usa el comando directo sin IA');
           ocupado.current = false;
           await guardar(servidor);
           return;
@@ -181,6 +195,8 @@ export function useEscuchaContinua({ onGuardar, onPreguntar }: Opciones) {
 
       setTranscripcion('');
       setEstado(habilitado.current ? 'esperando' : 'apagado');
+      bitacora.info('barbie', `Barbie: «${respuesta}»`);
+      terminarOrden();
       await decir(respuesta);
       ocupado.current = false;
       // Si Barbie preguntó algo ("¿en qué servidor?"), se le contesta sin volver a decir su nombre.
@@ -229,7 +245,7 @@ export function useEscuchaContinua({ onGuardar, onPreguntar }: Opciones) {
 
     if (resultado.tipo === 'guardar') {
       setTranscripcion(texto);
-      guardar(resultado.servidor);
+      guardar(resultado.servidor, texto);
     } else if (resultado.tipo === 'activado') {
       setTranscripcion(texto);
       if (!activado.current) activar();
@@ -243,6 +259,9 @@ export function useEscuchaContinua({ onGuardar, onPreguntar }: Opciones) {
     if (evento.error === 'aborted' || evento.error === 'no-speech') return;
     retrasoReinicio.current = RETRASO_REINICIO_ERROR_MS;
     erroresSeguidos.current += 1;
+    bitacora.error('voz', `Error del reconocimiento de voz: ${evento.error}`, {
+      detalle: `${evento.message || 'sin detalle'} (intento ${erroresSeguidos.current} de ${MAX_ERRORES_SEGUIDOS})`,
+    });
     if (ERRORES_FATALES.has(evento.error) || erroresSeguidos.current >= MAX_ERRORES_SEGUIDOS) {
       habilitado.current = false;
       desactivar();
@@ -257,6 +276,7 @@ export function useEscuchaContinua({ onGuardar, onPreguntar }: Opciones) {
 
   const encender = useCallback(async () => {
     if (!hayReconocimiento()) {
+      bitacora.error('voz', 'Este dispositivo o navegador no tiene reconocimiento de voz');
       setEstado('sinSoporte');
       setMensaje(
         ES_WEB
@@ -269,18 +289,21 @@ export function useEscuchaContinua({ onGuardar, onPreguntar }: Opciones) {
     if (!ES_WEB) {
       const permiso = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
       if (!permiso.granted) {
+        bitacora.error('voz', 'Permiso del micrófono denegado');
         setMensaje('Se necesita el permiso del micrófono para escuchar a Barbie.');
         return;
       }
     }
     habilitado.current = true;
     erroresSeguidos.current = 0;
+    bitacora.info('voz', 'Micrófono encendido; esperando «Barbie»');
     setMensaje('');
     setEstado('esperando');
     iniciarReconocedor();
   }, [iniciarReconocedor]);
 
   const apagar = useCallback(() => {
+    bitacora.info('voz', 'Micrófono apagado');
     habilitado.current = false;
     desactivar();
     setTranscripcion('');

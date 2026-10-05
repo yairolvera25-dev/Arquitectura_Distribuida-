@@ -25,15 +25,11 @@ Rellena:
 | Variable | Qué poner |
 |---|---|
 | `EXPO_PUBLIC_API_KEY` | **Pídesela a Uriel o a Yair por privado.** No está en el repo ni puede estarlo |
-| `EXPO_PUBLIC_USUARIO` | Tu usuario, p. ej. `haideni` (máx. 50 caracteres) |
-| `EXPO_PUBLIC_NOMBRE` | Tu nombre (obligatorio, máx. 50) |
-| `EXPO_PUBLIC_PATERNO` / `MATERNO` | Opcionales |
 | `EXPO_PUBLIC_GEMINI_API_KEY` | La inteligencia de Barbie. Gratis en https://aistudio.google.com/apikey. Sin ella, Barbie solo entiende "guardar en servidor uno/dos" |
 
 Las dos URLs de los servidores ya vienen bien en la plantilla; no las toques.
 
-> Si `EXPO_PUBLIC_USUARIO` o `EXPO_PUBLIC_NOMBRE` quedan vacíos, `guardarClima`
-> lanza un error antes de salir a la red. No es un fallo del servidor.
+> Ya no hay datos de usuario en el `.env`: quien guarda es la cuenta con la que inicias sesión en la app.
 
 ## 2. Mete el teléfono a ZeroTier
 

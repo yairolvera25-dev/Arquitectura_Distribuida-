@@ -1,16 +1,22 @@
+import { Ionicons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useState } from 'react';
-import { Platform, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import { GEMINI, type ServidorId } from '../config';
+import { cerrarSesion } from '../data/services/autenticacion';
+import { bitacora, cronometro } from '../data/services/bitacora';
 import { obtenerClima, type RegistroClima } from '../data/services/clima';
 import { conversarConBarbie } from '../data/services/gemini';
 import { obtenerPronostico, type Pronostico } from '../data/services/pronostico';
+import { consultarBitacora, respaldarBitacora } from '../data/services/respaldo';
 import { consultarRegistros, guardarClima, type DatoClima } from '../data/services/servidores';
 import { ChipEstado, DETALLE_SERVIDOR, ListaServidores, PanelAsistente, type EstadoServidor } from './components/Asistente';
 import { BarraLateral, Logo } from './components/BarraLateral';
 import { Destacados, PronosticoSemana, TarjetaActual } from './components/Clima';
+import { PanelRegistro } from './components/Registro';
 import { useEscuchaContinua } from './hooks/useEscuchaContinua';
+import { useSesion } from './hooks/useSesion';
 import { colores, espacio, radio } from './theme';
 
 const ANCHO_ESCRITORIO = 1024;
@@ -21,6 +27,10 @@ const hora = () => new Date().toLocaleTimeString('es-MX', { hour: '2-digit', min
 export default function HomeScreen() {
   const { width } = useWindowDimensions();
   const escritorio = width >= ANCHO_ESCRITORIO;
+  const usuario = useSesion()?.usuario;
+  const iniciales = usuario
+    ? [usuario.nombre, usuario.paterno].filter(Boolean).map((parte) => parte!.charAt(0).toUpperCase()).join('')
+    : '';
 
   const [clima, setClima] = useState<RegistroClima | null>(null);
   const [pronostico, setPronostico] = useState<Pronostico | null>(null);
@@ -30,14 +40,26 @@ export default function HomeScreen() {
 
   const cargarClima = useCallback(async () => {
     setCargando(true);
+    const tiempo = cronometro();
     try {
       const nuevo = await obtenerClima();
       setClima(nuevo);
       setErrorClima('');
+      bitacora.exito('clima', `Clima obtenido: ${nuevo.ciudad}, ${nuevo.temperatura} °C`, {
+        detalle: `${nuevo.latitud.toFixed(4)}, ${nuevo.longitud.toFixed(4)} · humedad ${nuevo.humedad} % · viento ${nuevo.viento} km/h`,
+        duracionMs: tiempo(),
+      });
       // El pronóstico es solo visual: si falla, el dashboard sigue funcionando.
-      obtenerPronostico(nuevo.latitud, nuevo.longitud).then(setPronostico, () => setPronostico(null));
+      obtenerPronostico(nuevo.latitud, nuevo.longitud).then(setPronostico, (error) => {
+        setPronostico(null);
+        bitacora.aviso('clima', 'No se pudo cargar el pronóstico', {
+          detalle: error instanceof Error ? error.message : String(error),
+        });
+      });
     } catch (error) {
-      setErrorClima(error instanceof Error ? error.message : 'No se pudo obtener el clima.');
+      const mensaje = error instanceof Error ? error.message : 'No se pudo obtener el clima.';
+      bitacora.error('clima', mensaje, { duracionMs: tiempo() });
+      setErrorClima(mensaje);
     } finally {
       setCargando(false);
     }
@@ -49,7 +71,10 @@ export default function HomeScreen() {
 
   const guardarEn = useCallback(
     async (servidor: ServidorId, datos?: DatoClima[]) => {
-      if (!clima) throw new Error('Todavía no tengo el clima para guardar, espera tantito.');
+      if (!clima) {
+        bitacora.error('clima', 'No hay datos del clima para guardar', { detalle: 'La ubicación o el clima no han cargado' });
+        throw new Error('Todavía no tengo el clima para guardar, espera tantito.');
+      }
       try {
         const guardado = await guardarClima(servidor, clima, datos);
         setServidores((previo) => ({ ...previo, [servidor]: { ok: true, detalle: `Guardado ${hora()}` } }));
@@ -72,7 +97,7 @@ export default function HomeScreen() {
 
   const onPreguntar = useCallback(
     (texto: string) =>
-      conversarConBarbie(texto, { clima, pronostico }, { guardar: guardarEn, consultar: consultarRegistros }),
+      conversarConBarbie(texto, { clima, pronostico }, { guardar: guardarEn, consultar: consultarRegistros, respaldarBitacora, consultarBitacora }),
     [clima, pronostico, guardarEn],
   );
 
@@ -114,6 +139,8 @@ export default function HomeScreen() {
             cargando={cargando}
             onAlternarVoz={voz.alternar}
             onActualizar={cargarClima}
+            iniciales={iniciales}
+            onCerrarSesion={cerrarSesion}
           />
           <ScrollView style={styles.flex} contentContainerStyle={styles.principal}>
             <View style={styles.fila}>
@@ -125,6 +152,7 @@ export default function HomeScreen() {
               <View style={[styles.flex, styles.columna]}>
                 {asistente}
                 {listaServidores}
+                <PanelRegistro />
               </View>
             </View>
           </ScrollView>
@@ -138,11 +166,18 @@ export default function HomeScreen() {
       <StatusBar style="light" />
       <View style={styles.encabezadoMovil}>
         <Logo horizontal />
-        <ChipEstado estado={voz.estado} />
+        <View style={styles.encabezadoDerecha}>
+          <ChipEstado estado={voz.estado} />
+          <Pressable onPress={cerrarSesion} style={styles.sesionMovil} accessibilityLabel="Cerrar sesión">
+            <Text style={styles.sesionMovilTexto}>{iniciales}</Text>
+            <Ionicons name="log-out-outline" size={16} color={colores.textoSecundario} />
+          </Pressable>
+        </View>
       </View>
       {actual}
       {asistente}
       {listaServidores}
+      <PanelRegistro />
       <Destacados clima={clima} pronostico={pronostico} />
       <PronosticoSemana pronostico={pronostico} />
     </ScrollView>
@@ -194,6 +229,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: espacio.md,
     paddingTop: Platform.select({ ios: 64, android: 48, default: espacio.lg }),
     paddingBottom: espacio.xl,
+  },
+  encabezadoDerecha: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: espacio.sm,
+  },
+  sesionMovil: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: colores.tarjetaAlta,
+  },
+  sesionMovilTexto: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colores.texto,
   },
   encabezadoMovil: {
     flexDirection: 'row',

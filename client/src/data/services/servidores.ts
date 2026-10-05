@@ -1,5 +1,7 @@
-import { API_KEY, SERVIDORES, USUARIO, type ServidorId } from '../../config';
+import { API_KEY, SERVIDORES, type ServidorId } from '../../config';
+import { bitacora, cronometro } from './bitacora';
 import type { RegistroClima } from './clima';
+import { guardarSesion, leerSesion } from './sesion';
 
 const TIEMPO_LIMITE_MS = 8000;
 
@@ -32,59 +34,115 @@ export type RegistroGuardado = {
   fechaHora: string;
 };
 
-async function pedir(servidorId: ServidorId, ruta: string, opciones: RequestInit = {}) {
+/** Error de un servidor; `status` es el código HTTP, o null si no hubo respuesta. */
+export class ErrorServidor extends Error {
+  constructor(
+    mensaje: string,
+    readonly status: number | null,
+  ) {
+    super(mensaje);
+  }
+}
+
+/** Lanza el error y lo deja en la bitácora con el detalle técnico. */
+function fallar(mensaje: string, status: number | null, detalle: string, duracionMs?: number): never {
+  bitacora.error('servidor', mensaje, { detalle, duracionMs });
+  throw new ErrorServidor(mensaje, status);
+}
+
+/**
+ * Petición a la API de un servidor con la API key y, si hay sesión, el token.
+ * El cuerpo nunca va a la bitácora (puede llevar la contraseña).
+ */
+export async function pedirServidor(servidorId: ServidorId, ruta: string, opciones: RequestInit = {}) {
   const servidor = SERVIDORES[servidorId];
+  const metodo = opciones.method ?? 'GET';
+  const peticion = `${metodo} ${servidor.url}${ruta}`;
   if (!servidor.url) {
-    throw new Error(`Falta configurar la URL de ${servidor.nombre} en el archivo .env.`);
+    fallar(`Falta configurar la URL de ${servidor.nombre} en el archivo .env.`, null, 'Variable EXPO_PUBLIC_SERVIDOR_*_URL vacía');
   }
 
+  const token = leerSesion()?.token;
+  const tiempo = cronometro();
   let respuesta: Response;
   try {
     respuesta = await fetch(`${servidor.url}${ruta}`, {
       ...opciones,
-      headers: { 'Content-Type': 'application/json', 'x-api-key': API_KEY },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': API_KEY,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       signal: AbortSignal.timeout(TIEMPO_LIMITE_MS),
     });
-  } catch {
-    throw new Error(`No se pudo conectar con ${servidor.nombre}.`);
+  } catch (error) {
+    const causa =
+      error instanceof Error && error.name === 'TimeoutError'
+        ? `sin respuesta en ${TIEMPO_LIMITE_MS / 1000} s`
+        : 'no hay conexión (¿ZeroTier conectado? ¿servidor encendido?)';
+    fallar(`No se pudo conectar con ${servidor.nombre}.`, null, `${peticion} → ${causa}`, tiempo());
   }
-  if (respuesta.status === 401) {
-    throw new Error(`${servidor.nombre} rechazó la API key; revisa que sea la misma en ambos .env.`);
-  }
+  const duracionMs = tiempo();
   const cuerpo = await respuesta.json().catch(() => null);
+
   if (!respuesta.ok) {
-    throw new Error(`${servidor.nombre}: ${cuerpo?.error ?? `respondió ${respuesta.status}`}`);
+    const detalle = `${peticion} → HTTP ${respuesta.status}${
+      Array.isArray(cuerpo?.errores) ? ` (${cuerpo.errores.join(' ')})` : ''
+    }`;
+    if (respuesta.status === 401 && cuerpo?.codigo === 'SESION') {
+      // El token expiró o no es válido: se cierra la sesión y la app vuelve al inicio de sesión.
+      guardarSesion(null);
+      fallar(cuerpo.error ?? 'Tu sesión expiró; vuelve a iniciar sesión.', 401, detalle, duracionMs);
+    }
+    if (respuesta.status === 401 && /api key/i.test(cuerpo?.error ?? '')) {
+      fallar(`${servidor.nombre} rechazó la API key; revisa que sea la misma en ambos .env.`, 401, detalle, duracionMs);
+    }
+    fallar(cuerpo?.error ?? `${servidor.nombre} respondió ${respuesta.status}.`, respuesta.status, detalle, duracionMs);
   }
+  bitacora.exito('servidor', `${servidor.nombre} respondió ${respuesta.status}`, {
+    detalle: `${peticion}${cuerpo?.id ? ` → registro ${cuerpo.id}` : ''}`,
+    duracionMs,
+  });
   return cuerpo;
 }
 
 /**
- * Guarda el registro en el servidor. Con `datos` solo se mandan esas partes;
- * quién guarda y la fecha y hora se registran siempre.
+ * Guarda el registro en el servidor. Con `datos` solo se mandan esas partes.
+ * Quién guarda lo pone el servidor a partir de la sesión; la fecha y hora, la base de datos.
  */
 export async function guardarClima(
   servidorId: ServidorId,
   registro: RegistroClima,
   datos?: DatoClima[],
-): Promise<{ id: number; fechaHora: string }> {
-  if (!USUARIO.usuario || !USUARIO.nombre) {
-    throw new Error('Falta configurar EXPO_PUBLIC_USUARIO y EXPO_PUBLIC_NOMBRE en el archivo .env.');
-  }
+): Promise<{ id: number; fechaHora: string; contenido: Partial<RegistroClima> }> {
   const campos = datos
     ? Object.fromEntries(datos.flatMap((dato) => CAMPOS[dato]).map((campo) => [campo, registro[campo]]))
     : registro;
-  const { id, fechaHora } = await pedir(servidorId, '/api/clima', {
+  const { id, fechaHora } = await pedirServidor(servidorId, '/api/clima', {
     method: 'POST',
-    body: JSON.stringify({ ...USUARIO, ...campos }),
+    body: JSON.stringify(campos),
   });
-  return { id, fechaHora };
+  return { id, fechaHora, contenido: campos };
 }
 
-/** Últimos registros del servidor y cuántos tiene en total (null si el servidor no lo dice). */
+/** Filtros de la consulta; las fechas en formato AAAA-MM-DD. */
+export type FiltrosConsulta = {
+  limite: number;
+  usuario?: string;
+  lugar?: string;
+  desde?: string;
+  hasta?: string;
+};
+
+/** Últimos registros del servidor que cumplen los filtros y cuántos hay en total (null si no lo dice). */
 export async function consultarRegistros(
   servidorId: ServidorId,
-  limite: number,
+  filtros: FiltrosConsulta,
 ): Promise<{ total: number | null; registros: RegistroGuardado[] }> {
-  const { total, registros } = await pedir(servidorId, `/api/clima?limite=${limite}`);
+  const parametros = Object.entries(filtros)
+    .filter(([, valor]) => valor !== undefined && valor !== '')
+    .map(([clave, valor]) => `${clave}=${encodeURIComponent(String(valor))}`)
+    .join('&');
+  const { total, registros } = await pedirServidor(servidorId, `/api/clima?${parametros}`);
   return { total: total ?? null, registros };
 }

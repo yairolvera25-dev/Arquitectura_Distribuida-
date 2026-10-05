@@ -1,9 +1,7 @@
 // Reglas de los campos de la tabla Georreferencia: [longitud máxima, obligatorio]
+// Quién guarda (usuario, nombre y apellidos) NO se lee del cuerpo: lo pone la ruta a partir
+// de la sesión, para que nadie pueda guardar a nombre de otro.
 const TEXTOS = {
-  usuario: [50, true],
-  nombre: [50, true],
-  paterno: [50, false],
-  materno: [50, false],
   estado: [50, false],
   municipio: [80, false],
 };

@@ -24,15 +24,20 @@ export const API_KEY = process.env.EXPO_PUBLIC_API_KEY ?? '';
 // Gemini, la inteligencia de Barbie. Sin API key, Barbie solo entiende "guardar en servidor uno/dos".
 export const GEMINI = {
   apiKey: process.env.EXPO_PUBLIC_GEMINI_API_KEY ?? '',
-  modelo: process.env.EXPO_PUBLIC_GEMINI_MODELO || 'gemini-3.8-flash',
-  // Se usa solo si el principal falla (saturado, sin cuota, no existe o muy lento). Vacío = sin respaldo.
-  respaldo: process.env.EXPO_PUBLIC_GEMINI_MODELO_RESPALDO ?? 'gemini-2.5-flash',
+  // Cadena de modelos: primero el principal y, si falla (sin cuota, saturado, no existe o muy lento),
+  // los respaldos en orden. Cada modelo gratis tiene su propia cuota (~20 peticiones al día).
+  modelos: [
+    ...new Set(
+      [
+        process.env.EXPO_PUBLIC_GEMINI_MODELO || 'gemini-3.8-flash',
+        ...(
+          process.env.EXPO_PUBLIC_GEMINI_MODELO_RESPALDO ??
+          'gemini-3.5-flash,gemini-2.5-flash,gemini-2.5-flash-lite,gemini-3-flash-preview'
+        ).split(','),
+      ]
+        .map((modelo) => modelo.trim())
+        .filter(Boolean),
+    ),
+  ],
 };
 
-// Datos de quien guarda los registros (campos Usuario, Nombre, Paterno y Materno de Georreferencia).
-export const USUARIO = {
-  usuario: process.env.EXPO_PUBLIC_USUARIO ?? '',
-  nombre: process.env.EXPO_PUBLIC_NOMBRE ?? '',
-  paterno: process.env.EXPO_PUBLIC_PATERNO ?? '',
-  materno: process.env.EXPO_PUBLIC_MATERNO ?? '',
-};

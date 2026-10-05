@@ -287,16 +287,31 @@ curl -H "x-api-key: TU_CLAVE" http://10.191.84.219:3000/api/clima   # últimos r
 
 ## Contrato de los servicios
 
-Ambos servidores exponen lo mismo, para que el cliente solo cambie la URL base.
+Ambos servidores exponen lo mismo, para que el cliente solo cambie la URL base. Todas las rutas, salvo `/api/salud`, llevan el header `x-api-key`.
 
-`POST /api/clima` (header `x-api-key`)
+### Cuentas (`/api/auth`)
+
+Las cuentas viven en **los dos servidores** (tabla `Usuarios`), así que se puede entrar aunque uno esté apagado. La app crea la cuenta en ambos. Si uno no respondía, se la copia la próxima vez que se inicia sesión con él encendido.
+
+| Ruta | Cuerpo | Respuesta |
+|---|---|---|
+| `POST /api/auth/registro` | `{ "usuario", "nombre", "paterno"?, "materno"?, "contrasena" }` | `201` cuenta creada · `400` datos inválidos · `409` el usuario ya existe |
+| `POST /api/auth/login` | `{ "usuario", "contrasena" }` | `200 { "token", "usuario": {…} }` · `401` usuario o contraseña incorrectos · `429` demasiados intentos |
+| `GET /api/auth/yo` | — (con `Authorization`) | `200 { "usuario": {…} }` |
+
+- `usuario`: de 3 a 30 caracteres `a-z 0-9 . _ -`; se guarda en minúsculas.
+- `contrasena`: de 8 a 72 caracteres, con al menos una letra y un número. Se guarda como **hash scrypt** con sal aleatoria, nunca en texto.
+- El token es un JWT HS256 que dura 12 horas, firmado con `TOKEN_SECRET`. **Ese secreto es el mismo en los dos servidores**, así que la sesión de uno sirve en el otro.
+- Si el usuario no existe o la contraseña está mal, el mensaje es el mismo, para no revelar qué usuarios existen. Tras **5 intentos fallidos** desde la misma IP, ese usuario se bloquea 15 minutos.
+
+### Registros del clima (`/api/clima`), con sesión iniciada
+
+Además de `x-api-key`, llevan el header `Authorization: Bearer <token>`. Sin él, o con el token vencido, responden `401` con `"codigo": "SESION"`.
+
+`POST /api/clima`
 
 ```json
 {
-  "usuario": "haideni",
-  "nombre": "Hai Deni",
-  "paterno": "Moctezuma",
-  "materno": "Perez",
   "estado": "Hidalgo",
   "municipio": "Pachuca de Soto",
   "latitud": 20.1011,
@@ -307,22 +322,55 @@ Ambos servidores exponen lo mismo, para que el cliente solo cambie la URL base.
 }
 ```
 
-- Obligatorios: solo `usuario` y `nombre`. Los datos del clima son opcionales para poder guardar uno solo ("Barbie, guarda solo la temperatura"); lo que no se manda queda en `NULL`. `latitud` y `longitud` van juntas o ninguna. Los campos de más (`ciudad`, `condicion`, `fecha_hora`) se ignoran.
-- `FechaHora` la pone la base de datos al insertar.
-- Datos del usuario: salen de `EXPO_PUBLIC_USUARIO`, `EXPO_PUBLIC_NOMBRE`, `EXPO_PUBLIC_PATERNO` y `EXPO_PUBLIC_MATERNO` en `client/.env`.
+- **Quién guarda** (`Usuario`, `Nombre`, `Paterno`, `Materno`) lo pone el servidor a partir del token; lo que mande la app en esos campos se ignora. Así nadie puede guardar a nombre de otro.
+- Los datos del clima son opcionales, para poder guardar uno solo ("Barbie, guarda solo la temperatura"). `latitud` y `longitud` van juntas o ninguna. `FechaHora` la pone la base de datos.
 
-Respuestas:
+`GET /api/clima?limite=50&usuario=haideni&lugar=pachuca&desde=2026-10-01&hasta=2026-10-05`: todos los filtros son opcionales. `lugar` busca en municipio o estado, y las fechas son `AAAA-MM-DD`, incluidas. Responde `{ "ok": true, "servidor": "linux", "total": 12, "registros": [ … ] }`, donde `total` cuenta los que cumplen los filtros.
 
-| Código | Cuándo | Cuerpo |
-|---|---|---|
-| `201` | Registro guardado | `{ "ok": true, "servidor": "windows" \| "linux", "id": 1, "fechaHora": "…" }` |
-| `400` | Datos inválidos | `{ "ok": false, "error": "Datos inválidos.", "errores": ["…"] }` |
-| `401` | API key incorrecta | `{ "ok": false, "error": "API key inválida." }` |
-| `503` | La BD no responde | `{ "ok": false, "error": "La base de datos no está disponible." }` |
+| Código | Cuándo |
+|---|---|
+| `201` | Registro guardado: `{ "ok": true, "servidor", "id", "fechaHora" }` |
+| `400` | Datos o filtros inválidos: `{ "ok": false, "error", "errores": [ … ] }` |
+| `401` | API key incorrecta, o sin sesión (`"codigo": "SESION"`) |
+| `503` | La BD no responde |
 
-`GET /api/clima?limite=50` (header `x-api-key`) devuelve los últimos registros de ese servidor y cuántos tiene en total: `{ "ok": true, "servidor": "linux", "total": 230, "registros": [ … ] }`.
+### Respaldo de la bitácora (`/api/bitacora`), con sesión iniciada
+
+La app puede respaldar sus logs (cada orden a Barbie, sus pasos y sus errores) en uno o en los dos servidores, desde el botón de la nube del *Registro de actividad* o pidiéndoselo a Barbie. Solo manda los eventos que ese servidor todavía no tiene.
+
+- `POST /api/bitacora` con `{ "eventos": [ { "fecha": <ms>, "nivel": "info|exito|aviso|error", "origen", "mensaje", "detalle"?, "orden"? } ] }` (de 1 a 200) → `201 { "guardados": n }`. Quedan a nombre de quien tiene la sesión.
+- `GET /api/bitacora?limite=50&usuario=…` → `{ "total", "eventos": [ … ] }`.
 
 `GET /api/salud` (sin API key) indica si el servicio y su base de datos responden.
+
+### Actualizar los servidores para el inicio de sesión y el respaldo de logs
+
+Una sola persona genera el secreto de las sesiones y se lo pasa a la otra **por privado**:
+
+```bash
+openssl rand -hex 32
+```
+
+**Servidor dos (Ubuntu):** el instalador crea las tablas `Usuarios` y `Bitacora` y pide `TOKEN_SECRET` si falta en el `.env`.
+
+```bash
+cd <repo>/server-linux
+git pull
+sudo bash deploy/instalar.sh
+```
+
+**Servidor uno (Windows):**
+
+1. En SSMS, conectado como administrador, ejecuta `server-windows\sql\03_usuarios.sql` y después `server-windows\sql\04_bitacora.sql`.
+2. En PowerShell como Administrador, dentro de `server-windows`:
+   ```powershell
+   git pull
+   npm ci --omit=dev
+   notepad .env      # agrega la línea TOKEN_SECRET=… (la misma que en el servidor dos)
+   powershell -ExecutionPolicy Bypass -File deploy\instalar.ps1
+   ```
+
+`instalar.ps1` no arranca si falta `TOKEN_SECRET`. Sin esa línea, el servicio tampoco inicia.
 
 ## Comandos de voz
 
@@ -380,11 +428,14 @@ Las dos VMs están en computadoras distintas y el celular debe alcanzar ambas.
 
 - API key en el header `x-api-key`; las peticiones sin ella se rechazan con `401`.
 - Validación de datos en el servidor y consultas parametrizadas.
-- Usuario de BD `upp_api` con permisos mínimos (`INSERT` y `SELECT` sobre la tabla), nunca `sa` ni `postgres`. Si alguien roba la API key puede insertar registros, pero no borrar ni modificar.
+- **Inicio de sesión** obligatorio para guardar y consultar: contraseñas con hash scrypt y sal, tokens JWT firmados que vencen a las 12 horas, mensaje de error único para usuario inexistente o contraseña incorrecta, y bloqueo de 15 minutos tras 5 intentos fallidos.
+- Quién guarda cada registro sale del token, no del cuerpo de la petición: no se puede guardar a nombre de otro.
+- Usuario de BD `upp_api` con permisos mínimos (`INSERT` y `SELECT` sobre `Georreferencia`, `Usuarios` y `Bitacora`), nunca `sa` ni `postgres`. No puede borrar ni modificar registros, cuentas ni logs.
 - Las peticiones con datos inválidos se rechazan con `400` antes de llegar a la BD.
 - En Ubuntu, el servicio corre con un usuario de sistema sin shell y con el endurecimiento de systemd (`NoNewPrivileges`, `ProtectSystem`).
 - **Pendiente:** hoy las dos bases de datos **sí** están expuestas a la red ZeroTier. Comprobado: PostgreSQL escucha en `0.0.0.0:5432` con `ufw` desactivado, y el `1433` de SQL Server acepta conexiones desde la red del equipo (regla heredada de la Actividad 2). Las dos deben quedar solo para `localhost` o para la red interna de cada VM antes de entregar.
-- Credenciales y API key en `.env`, que no se sube al repo.
+- Credenciales, API key y `TOKEN_SECRET` en `.env`, que no se sube al repo. `TOKEN_SECRET` vive solo en los servidores, nunca en la app.
+- Pendiente para el Parcial 2: verificación en dos pasos (2FA) sobre este inicio de sesión.
 - Limitación conocida: las variables `EXPO_PUBLIC_*` quedan dentro de la app, así que la API key del cliente se puede extraer del APK.
 
 ## Entregables

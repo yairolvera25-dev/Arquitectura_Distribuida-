@@ -26,7 +26,20 @@ export async function insertarRegistro(r) {
   return rows[0];
 }
 
-export async function listarRegistros(limite) {
+/** Últimos registros que cumplen los filtros y cuántos hay en total con esos filtros. */
+export async function listarRegistros({ limite, usuario, lugar, desde, hasta }) {
+  const condiciones = [];
+  const valores = [];
+  const agregar = (sql, valor) => {
+    valores.push(valor);
+    condiciones.push(sql.replaceAll('?', `$${valores.length}`));
+  };
+  if (usuario) agregar('lower("Usuario") = ?', usuario);
+  if (lugar) agregar('("Municipio" ILIKE ? OR "Estado" ILIKE ?)', `%${lugar}%`);
+  if (desde) agregar('"FechaHora" >= ?::date', desde);
+  if (hasta) agregar('"FechaHora" < ?::date + 1', hasta);
+  const donde = condiciones.length ? `WHERE ${condiciones.join(' AND ')}` : '';
+
   const [{ rows }, conteo] = await Promise.all([
     pool.query(
       `SELECT "Id" AS id, "Usuario" AS usuario, "Nombre" AS nombre, "Paterno" AS paterno,
@@ -34,11 +47,12 @@ export async function listarRegistros(limite) {
               "Latitud" AS latitud, "Longitud" AS longitud, "Temperatura" AS temperatura,
               "Humedad" AS humedad, "Viento" AS viento, "FechaHora" AS "fechaHora"
          FROM "Georreferencia"
+         ${donde}
         ORDER BY "Id" DESC
-        LIMIT $1`,
-      [limite],
+        LIMIT $${valores.length + 1}`,
+      [...valores, limite],
     ),
-    pool.query('SELECT COUNT(*)::int AS total FROM "Georreferencia"'),
+    pool.query(`SELECT COUNT(*)::int AS total FROM "Georreferencia" ${donde}`, valores),
   ]);
   return { registros: rows, total: conteo.rows[0].total };
 }

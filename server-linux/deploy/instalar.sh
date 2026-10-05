@@ -105,12 +105,25 @@ paso "Usuario de PostgreSQL con permisos mínimos"
 # usuario postgres no puede entrar a leerlo.
 sudo -u postgres psql -q -d UPP -f - < "$DESTINO/sql/02_usuario_api.sql"
 ok "Rol upp_api creado con SELECT e INSERT sobre Georreferencia"
+sudo -u postgres psql -q -d UPP -f - < "$DESTINO/sql/03_usuarios.sql"
+ok "Tabla Usuarios lista (upp_api solo puede leer y crear cuentas)"
+sudo -u postgres psql -q -d UPP -f - < "$DESTINO/sql/04_bitacora.sql"
+ok "Tabla Bitacora lista (respaldo de los logs de la app)"
 
 # ----------------------------------------------------------- 7. Configuración
 paso "Configuración (.env)"
 
 if [[ -f $DESTINO/.env && $RECONFIGURAR != "--reconfigurar" ]]; then
   ok "Ya existe un .env; lo dejo como está (usa --reconfigurar para rehacerlo)"
+  # Instalaciones anteriores al inicio de sesión no tienen TOKEN_SECRET: se agrega.
+  if ! grep -q '^TOKEN_SECRET=..*' "$DESTINO/.env"; then
+    echo "    Falta TOKEN_SECRET (firma las sesiones). Tiene que ser la MISMA que en el servidor uno."
+    read -rsp "    TOKEN_SECRET (mínimo 32 caracteres): " TOKEN_SECRET < /dev/tty; echo
+    [[ ${#TOKEN_SECRET} -ge 32 ]] || morir "TOKEN_SECRET muy corta (mínimo 32). Genérala con: openssl rand -hex 32"
+    sed -i '/^TOKEN_SECRET=/d' "$DESTINO/.env"
+    printf 'TOKEN_SECRET="%s"\n' "$TOKEN_SECRET" >> "$DESTINO/.env"
+    ok "TOKEN_SECRET agregada al .env"
+  fi
 else
   # Solo el valor sale por stdout; los mensajes van a la terminal, porque la
   # función se llama dentro de $(...) y si no se colarían dentro del secreto.
@@ -132,6 +145,8 @@ else
 
   echo "    La API key tiene que ser la MISMA que EXPO_PUBLIC_API_KEY del cliente."
   API_KEY=${API_KEY:-$(leer_secreto "API key (mínimo 16)" 16)}
+  echo "    TOKEN_SECRET firma las sesiones y tiene que ser la MISMA que en el servidor uno."
+  TOKEN_SECRET=${TOKEN_SECRET:-$(leer_secreto "TOKEN_SECRET (mínimo 32)" 32)}
   DB_PASSWORD=${DB_PASSWORD:-$(leer_secreto "Contraseña nueva para upp_api (mínimo 8)" 8)}
 
   # La contraseña se asigna por stdin, no en la línea de comandos, para que no
@@ -147,6 +162,7 @@ SQL
 PORT=3000
 HOST=0.0.0.0
 API_KEY="$API_KEY"
+TOKEN_SECRET="$TOKEN_SECRET"
 DB_HOST=127.0.0.1
 DB_PORT=5432
 DB_NAME=UPP

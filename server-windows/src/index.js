@@ -4,6 +4,9 @@ import express from 'express';
 
 import { verificarConexion } from './db/conexion.js';
 import { exigirApiKey } from './middleware/apiKey.js';
+import { exigirSesion } from './middleware/sesion.js';
+import { rutasAuth } from './routes/auth.js';
+import { rutasBitacora } from './routes/bitacora.js';
 import { rutasClima } from './routes/clima.js';
 
 const SERVIDOR = 'windows';
@@ -12,6 +15,11 @@ const HOST = process.env.HOST ?? '0.0.0.0';
 
 if (!process.env.API_KEY || process.env.API_KEY.length < 16) {
   console.error('Falta API_KEY en el archivo .env (mínimo 16 caracteres).');
+  process.exit(1);
+}
+// Firma los tokens de sesión. Debe ser la MISMA en los dos servidores.
+if (!process.env.TOKEN_SECRET || process.env.TOKEN_SECRET.length < 32) {
+  console.error('Falta TOKEN_SECRET en el archivo .env (mínimo 32 caracteres, igual en los dos servidores).');
   process.exit(1);
 }
 
@@ -26,7 +34,8 @@ const origenes = (process.env.CORS_ORIGINS ?? '')
 const app = express();
 app.disable('x-powered-by');
 app.use(cors({ origin: origenes.length ? origenes : '*' }));
-app.use(express.json({ limit: '10kb' }));
+// 200 eventos de la bitácora caben en ~100 KB.
+app.use(express.json({ limit: '200kb' }));
 
 // Sin API key: solo dice si el servicio y la base de datos responden.
 app.get('/api/salud', async (_req, res) => {
@@ -39,7 +48,9 @@ app.get('/api/salud', async (_req, res) => {
   }
 });
 
-app.use('/api/clima', exigirApiKey, rutasClima(SERVIDOR));
+app.use('/api/auth', exigirApiKey, rutasAuth(SERVIDOR));
+app.use('/api/clima', exigirApiKey, exigirSesion, rutasClima(SERVIDOR));
+app.use('/api/bitacora', exigirApiKey, exigirSesion, rutasBitacora(SERVIDOR));
 
 app.use((_req, res) => {
   res.status(404).json({ ok: false, error: 'Ruta no encontrada.' });

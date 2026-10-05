@@ -12,10 +12,20 @@ type Props = {
   cargando: boolean;
   onAlternarVoz: () => void;
   onActualizar: () => void;
+  iniciales: string;
+  onCerrarSesion: () => void;
 };
 
 /** Barra lateral para escritorio/tablet (como en el diseño de referencia). */
-export function BarraLateral({ estadoVoz, servidores, cargando, onAlternarVoz, onActualizar }: Props) {
+export function BarraLateral({
+  estadoVoz,
+  servidores,
+  cargando,
+  onAlternarVoz,
+  onActualizar,
+  iniciales,
+  onCerrarSesion,
+}: Props) {
   const apagado = microfonoApagado(estadoVoz);
   return (
     <View style={styles.barra}>
@@ -47,8 +57,9 @@ export function BarraLateral({ estadoVoz, servidores, cargando, onAlternarVoz, o
         })}
       </View>
 
-      <View style={styles.avatar}>
-        <Text style={styles.avatarTexto}>UPP</Text>
+      <Boton icono="log-out-outline" etiqueta="Cerrar sesión" onPress={onCerrarSesion} />
+      <View style={styles.avatar} accessibilityLabel="Usuario con sesión iniciada">
+        <Text style={styles.avatarTexto}>{iniciales}</Text>
       </View>
     </View>
   );

@@ -5,6 +5,7 @@ import { GEMINI, SERVIDORES, type ServidorId } from '../../config';
 import type { EstadoVoz } from '../hooks/useEscuchaContinua';
 import { colores, espacio, radio } from '../theme';
 import { OrbeVoz } from './OrbeVoz';
+import { CadenaOrden } from './Registro';
 import { estilosTarjeta, Tarjeta } from './Tarjeta';
 
 export type EstadoServidor = { ok: boolean; detalle: string };
@@ -58,6 +59,7 @@ export function PanelAsistente({ estado, transcripcion, mensaje, onAlternar, sty
               <Text style={styles.burbujaTexto}>{mensaje}</Text>
             </View>
           ) : null}
+          <CadenaOrden />
         </View>
       </View>
     </Tarjeta>

@@ -4,6 +4,12 @@
 $ErrorActionPreference = 'Stop'
 $carpeta = Split-Path -Parent $PSScriptRoot
 
+# 0. El .env necesita TOKEN_SECRET (firma las sesiones; la MISMA que en el servidor dos).
+$envArchivo = Join-Path $carpeta '.env'
+if (-not (Test-Path $envArchivo) -or -not (Select-String -Path $envArchivo -Pattern '^TOKEN_SECRET=.{32,}' -Quiet)) {
+  throw "Falta TOKEN_SECRET (mínimo 32 caracteres) en $envArchivo. Pídela a quien la generó y agrégala antes de seguir."
+}
+
 # 1. Firewall: puerto 3000 abierto solo para la red ZeroTier del equipo.
 if (-not (Get-NetFirewallRule -DisplayName 'API Clima UPP 3000' -ErrorAction SilentlyContinue)) {
   New-NetFirewallRule -DisplayName 'API Clima UPP 3000' -Direction Inbound -Protocol TCP `

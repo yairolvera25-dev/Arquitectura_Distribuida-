@@ -295,14 +295,16 @@ Las cuentas viven en **los dos servidores** (tabla `Usuarios`), así que se pued
 
 | Ruta | Cuerpo | Respuesta |
 |---|---|---|
-| `POST /api/auth/registro` | `{ "usuario", "nombre", "paterno"?, "materno"?, "contrasena" }` | `201` cuenta creada · `400` datos inválidos · `409` el usuario ya existe |
+| `POST /api/auth/registro` | `{ "usuario", "nombre", "paterno"?, "materno"?, "contrasena", "codigoRecuperacion"? }` | `201 { "usuario", "codigoRecuperacion" }` · `400` datos inválidos · `409` el usuario ya existe |
 | `POST /api/auth/login` | `{ "usuario", "contrasena" }` | `200 { "token", "usuario": {…} }` · `401` usuario o contraseña incorrectos · `429` demasiados intentos |
+| `POST /api/auth/restablecer` | `{ "usuario", "codigo", "contrasena" }` | `200` contraseña cambiada · `400` contraseña inválida · `401` usuario o código incorrectos · `429` demasiados intentos |
 | `GET /api/auth/yo` | — (con `Authorization`) | `200 { "usuario": {…} }` |
 
 - `usuario`: de 3 a 30 caracteres `a-z 0-9 . _ -`; se guarda en minúsculas.
 - `contrasena`: de 8 a 72 caracteres, con al menos una letra y un número. Se guarda como **hash scrypt** con sal aleatoria, nunca en texto.
 - El token es un JWT HS256 que dura 12 horas, firmado con `TOKEN_SECRET`. **Ese secreto es el mismo en los dos servidores**, así que la sesión de uno sirve en el otro.
 - Si el usuario no existe o la contraseña está mal, el mensaje es el mismo, para no revelar qué usuarios existen. Tras **5 intentos fallidos** desde la misma IP, ese usuario se bloquea 15 minutos.
+- **Restablecer la contraseña:** al registrarse, el primer servidor genera un **código de recuperación** de 12 caracteres (p. ej. `K7QF-M2XP-9TRW`), que la app le pasa al segundo para que sea el mismo en ambos. Se devuelve en texto **una sola vez** para que la persona lo guarde, y se almacena con hash scrypt. Con usuario + código se pone una contraseña nueva en los dos servidores. Tiene el mismo límite de intentos que el login. `upp_api` solo puede hacer `UPDATE` de la columna `Contrasena`.
 
 ### Registros del clima (`/api/clima`), con sesión iniciada
 
@@ -430,7 +432,7 @@ Las dos VMs están en computadoras distintas y el celular debe alcanzar ambas.
 - Validación de datos en el servidor y consultas parametrizadas.
 - **Inicio de sesión** obligatorio para guardar y consultar: contraseñas con hash scrypt y sal, tokens JWT firmados que vencen a las 12 horas, mensaje de error único para usuario inexistente o contraseña incorrecta, y bloqueo de 15 minutos tras 5 intentos fallidos.
 - Quién guarda cada registro sale del token, no del cuerpo de la petición: no se puede guardar a nombre de otro.
-- Usuario de BD `upp_api` con permisos mínimos (`INSERT` y `SELECT` sobre `Georreferencia`, `Usuarios` y `Bitacora`), nunca `sa` ni `postgres`. No puede borrar ni modificar registros, cuentas ni logs.
+- Usuario de BD `upp_api` con permisos mínimos (`INSERT` y `SELECT` sobre `Georreferencia`, `Usuarios` y `Bitacora`, más `UPDATE` solo de la columna `Usuarios.Contrasena` para restablecerla), nunca `sa` ni `postgres`. No puede borrar ni modificar registros, logs ni ningún otro dato de las cuentas.
 - Las peticiones con datos inválidos se rechazan con `400` antes de llegar a la BD.
 - En Ubuntu, el servicio corre con un usuario de sistema sin shell y con el endurecimiento de systemd (`NoNewPrivileges`, `ProtectSystem`).
 - **Pendiente:** hoy las dos bases de datos **sí** están expuestas a la red ZeroTier. Comprobado: PostgreSQL escucha en `0.0.0.0:5432` con `ufw` desactivado, y el `1433` de SQL Server acepta conexiones desde la red del equipo (regla heredada de la Actividad 2). Las dos deben quedar solo para `localhost` o para la red interna de cada VM antes de entregar.

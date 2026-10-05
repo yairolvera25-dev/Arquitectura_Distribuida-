@@ -94,6 +94,15 @@ export async function pedirServidor(servidorId: ServidorId, ruta: string, opcion
       guardarSesion(null);
       fallar(cuerpo.error ?? 'Tu sesión expiró; vuelve a iniciar sesión.', 401, detalle, duracionMs);
     }
+    if (respuesta.status === 404) {
+      // La app es más nueva que el servidor: le falta esa ruta (p. ej. /api/auth antes de actualizarlo).
+      fallar(
+        `${servidor.nombre} todavía no tiene esta función: hay que actualizarlo (git pull e instalador).`,
+        404,
+        detalle,
+        duracionMs,
+      );
+    }
     if (respuesta.status === 401 && /api key/i.test(cuerpo?.error ?? '')) {
       fallar(`${servidor.nombre} rechazó la API key; revisa que sea la misma en ambos .env.`, 401, detalle, duracionMs);
     }

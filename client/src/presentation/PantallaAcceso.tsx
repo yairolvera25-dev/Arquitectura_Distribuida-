@@ -14,23 +14,41 @@ import {
   type TextInputProps,
 } from 'react-native';
 
-import { iniciarSesion, registrar } from '../data/services/autenticacion';
+import { iniciarSesion, registrar, restablecerContrasena } from '../data/services/autenticacion';
 import { Aparecer } from './components/animaciones';
 import { Logo } from './components/BarraLateral';
 import { FondoAnimado } from './components/FondoAnimado';
 import { colores, espacio, radio, vidrio } from './theme';
 
-type Modo = 'entrar' | 'registro';
+type Modo = 'entrar' | 'registro' | 'restablecer';
 
 const USUARIO_VALIDO = /^[a-z0-9._-]{3,30}$/;
 
+const SUBTITULO: Record<Modo, string> = {
+  entrar: 'Inicia sesión para hablar con Barbie',
+  registro: 'Crea tu cuenta en los dos servidores',
+  restablecer: 'Usa tu código de recuperación para poner una contraseña nueva',
+};
+
+const BOTON: Record<Modo, string> = {
+  entrar: 'Entrar',
+  registro: 'Crear cuenta',
+  restablecer: 'Cambiar contraseña y entrar',
+};
+
+const normalizarUsuario = (usuario: string) => usuario.trim().toLowerCase();
+
 /** Mismas reglas que valida el servidor, para avisar antes de mandar nada. */
 function validar(modo: Modo, campos: Record<string, string>): string | null {
-  if (!campos.usuario || !campos.contrasena) return 'Escribe tu usuario y tu contraseña.';
+  const usuario = normalizarUsuario(campos.usuario);
+  if (!usuario || !campos.contrasena) return 'Escribe tu usuario y tu contraseña.';
   if (modo === 'entrar') return null;
-  if (!campos.nombre.trim()) return 'Escribe tu nombre.';
-  if (!USUARIO_VALIDO.test(campos.usuario)) {
+  if (modo === 'registro' && !campos.nombre.trim()) return 'Escribe tu nombre.';
+  if (modo === 'registro' && !USUARIO_VALIDO.test(usuario)) {
     return 'El usuario debe tener de 3 a 30 caracteres: letras, números, punto, guion o guion bajo (sin espacios).';
+  }
+  if (modo === 'restablecer' && campos.codigo.replace(/[^a-zA-Z0-9]/g, '').length !== 12) {
+    return 'El código de recuperación tiene 12 caracteres (por ejemplo K7QF-M2XP-9TRW).';
   }
   if (campos.contrasena.length < 8) return 'La contraseña debe tener al menos 8 caracteres.';
   if (!/[a-zA-Z]/.test(campos.contrasena) || !/[0-9]/.test(campos.contrasena)) {
@@ -42,15 +60,37 @@ function validar(modo: Modo, campos: Record<string, string>): string | null {
 
 export default function PantallaAcceso() {
   const [modo, setModo] = useState<Modo>('entrar');
-  const [campos, setCampos] = useState({ usuario: '', contrasena: '', confirmar: '', nombre: '', paterno: '', materno: '' });
+  const [campos, setCampos] = useState({
+    usuario: '',
+    contrasena: '',
+    confirmar: '',
+    nombre: '',
+    paterno: '',
+    materno: '',
+    codigo: '',
+  });
   const [verContrasena, setVerContrasena] = useState(false);
   const [enviando, setEnviando] = useState(false);
   const [error, setError] = useState('');
+  const [aviso, setAviso] = useState('');
+  // Código de recuperación recién creado: se muestra antes de entrar, para que lo guarden.
+  const [codigoNuevo, setCodigoNuevo] = useState<string | null>(null);
   const contrasenaRef = useRef<TextInput>(null);
 
   const cambiar = (campo: keyof typeof campos) => (valor: string) => {
-    setCampos((previo) => ({ ...previo, [campo]: campo === 'usuario' ? valor.trim().toLowerCase() : valor }));
+    setCampos((previo) => ({ ...previo, [campo]: valor }));
     setError('');
+  };
+
+  const entrar = async () => {
+    setEnviando(true);
+    try {
+      // Al terminar, la app cambia sola al dashboard (escucha la sesión).
+      await iniciarSesion(normalizarUsuario(campos.usuario), campos.contrasena);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo iniciar sesión.');
+      setEnviando(false);
+    }
   };
 
   const enviar = async () => {
@@ -61,18 +101,29 @@ export default function PantallaAcceso() {
     }
     setEnviando(true);
     setError('');
+    setAviso('');
+    const usuario = normalizarUsuario(campos.usuario);
     try {
       if (modo === 'registro') {
-        await registrar({
-          usuario: campos.usuario,
+        const { resultado, codigoRecuperacion } = await registrar({
+          usuario,
           nombre: campos.nombre.trim(),
           paterno: campos.paterno.trim() || null,
           materno: campos.materno.trim() || null,
           contrasena: campos.contrasena,
         });
+        if (resultado.windows !== 'creada' || resultado.linux !== 'creada') {
+          const falta = resultado.windows !== 'creada' ? 'uno' : 'dos';
+          setAviso(`La cuenta quedó solo en un servidor; el servidor ${falta} no respondió. Se copiará cuando entres con él encendido.`);
+        }
+        setCodigoNuevo(codigoRecuperacion ?? '—');
+        setEnviando(false);
+        return;
       }
-      // Al terminar, la app cambia sola al dashboard (escucha la sesión).
-      await iniciarSesion(campos.usuario, campos.contrasena);
+      if (modo === 'restablecer') {
+        await restablecerContrasena(usuario, campos.codigo, campos.contrasena);
+      }
+      await iniciarSesion(usuario, campos.contrasena);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo completar. Intenta de nuevo.');
       setEnviando(false);
@@ -82,7 +133,15 @@ export default function PantallaAcceso() {
   const cambiarModo = (nuevo: Modo) => {
     setModo(nuevo);
     setError('');
+    setAviso('');
+    setCampos((previo) => ({ ...previo, contrasena: '', confirmar: '' }));
   };
+
+  const ojo = (
+    <Pressable onPress={() => setVerContrasena((v) => !v)} hitSlop={8} accessibilityLabel="Mostrar contraseña">
+      <Ionicons name={verContrasena ? 'eye-off-outline' : 'eye-outline'} size={18} color={colores.textoSecundario} />
+    </Pressable>
+  );
 
   return (
     <KeyboardAvoidingView style={styles.pantalla} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -90,106 +149,158 @@ export default function PantallaAcceso() {
       <FondoAnimado cielo="despejado" noche />
       <ScrollView contentContainerStyle={styles.contenido} keyboardShouldPersistTaps="handled">
         <Aparecer>
-        <View style={styles.tarjeta}>
-          <View style={styles.encabezado}>
-            <Logo horizontal />
-            <Text style={styles.titulo}>Clima distribuido</Text>
-            <Text style={styles.subtitulo}>
-              {modo === 'entrar' ? 'Inicia sesión para hablar con Barbie' : 'Crea tu cuenta en los dos servidores'}
-            </Text>
-          </View>
-
-          <View style={styles.pestanas}>
-            <Pestana activa={modo === 'entrar'} texto="Iniciar sesión" onPress={() => cambiarModo('entrar')} />
-            <Pestana activa={modo === 'registro'} texto="Crear cuenta" onPress={() => cambiarModo('registro')} />
-          </View>
-
-          {modo === 'registro' ? (
-            <>
-              <Campo icono="person-outline" placeholder="Nombre" value={campos.nombre} onChangeText={cambiar('nombre')} autoComplete="given-name" />
-              <View style={styles.fila}>
-                <Campo
-                  style={styles.flex}
-                  placeholder="Apellido paterno"
-                  value={campos.paterno}
-                  onChangeText={cambiar('paterno')}
-                  autoComplete="family-name"
-                />
-                <Campo style={styles.flex} placeholder="Apellido materno" value={campos.materno} onChangeText={cambiar('materno')} />
-              </View>
-            </>
-          ) : null}
-
-          <Campo
-            icono="at"
-            placeholder="Usuario"
-            value={campos.usuario}
-            onChangeText={cambiar('usuario')}
-            autoCapitalize="none"
-            autoCorrect={false}
-            autoComplete="username"
-            returnKeyType="next"
-            onSubmitEditing={() => contrasenaRef.current?.focus()}
-          />
-          <Campo
-            ref={contrasenaRef}
-            icono="lock-closed-outline"
-            placeholder="Contraseña"
-            value={campos.contrasena}
-            onChangeText={cambiar('contrasena')}
-            secureTextEntry={!verContrasena}
-            autoCapitalize="none"
-            autoComplete={modo === 'entrar' ? 'current-password' : 'new-password'}
-            onSubmitEditing={modo === 'entrar' ? enviar : undefined}
-            accion={
-              <Pressable onPress={() => setVerContrasena((v) => !v)} hitSlop={8} accessibilityLabel="Mostrar contraseña">
-                <Ionicons name={verContrasena ? 'eye-off-outline' : 'eye-outline'} size={18} color={colores.textoSecundario} />
-              </Pressable>
-            }
-          />
-          {modo === 'registro' ? (
-            <>
-              <Campo
-                icono="lock-closed-outline"
-                placeholder="Confirmar contraseña"
-                value={campos.confirmar}
-                onChangeText={cambiar('confirmar')}
-                secureTextEntry={!verContrasena}
-                autoCapitalize="none"
-                autoComplete="new-password"
-                onSubmitEditing={enviar}
-              />
-              <Text style={styles.ayuda}>Mínimo 8 caracteres, con al menos una letra y un número.</Text>
-            </>
-          ) : null}
-
-          {error ? (
-            <View style={styles.error}>
-              <Ionicons name="alert-circle" size={18} color={colores.error} />
-              <Text style={styles.errorTexto}>{error}</Text>
+          <View style={styles.tarjeta}>
+            <View style={styles.encabezado}>
+              <Logo horizontal />
+              <Text style={styles.titulo}>{codigoNuevo ? '¡Cuenta creada!' : 'Clima distribuido'}</Text>
+              <Text style={styles.subtitulo}>
+                {codigoNuevo ? 'Guarda tu código de recuperación antes de entrar' : SUBTITULO[modo]}
+              </Text>
             </View>
-          ) : null}
 
-          <Pressable
-            onPress={enviar}
-            disabled={enviando}
-            style={({ pressed }) => [styles.boton, (pressed || enviando) && { opacity: 0.75 }]}
-          >
-            {enviando ? (
-              <ActivityIndicator color={colores.fondo} />
+            {codigoNuevo ? (
+              <>
+                <View style={styles.codigoCaja}>
+                  <Ionicons name="key-outline" size={20} color={colores.sol} />
+                  <Text style={styles.codigo} selectable>
+                    {codigoNuevo}
+                  </Text>
+                </View>
+                <Text style={styles.ayudaCodigo}>
+                  Anótalo o tómale captura y guárdalo en un lugar seguro. Es la única forma de restablecer tu
+                  contraseña si la olvidas, y no se vuelve a mostrar.
+                </Text>
+                {aviso ? <Aviso texto={aviso} /> : null}
+                {error ? <CajaError texto={error} /> : null}
+                <Boton texto="Ya lo guardé, entrar" enviando={enviando} onPress={entrar} />
+              </>
             ) : (
-              <Text style={styles.botonTexto}>{modo === 'entrar' ? 'Entrar' : 'Crear cuenta y entrar'}</Text>
-            )}
-          </Pressable>
+              <>
+                {modo !== 'restablecer' ? (
+                  <View style={styles.pestanas}>
+                    <Pestana activa={modo === 'entrar'} texto="Iniciar sesión" onPress={() => cambiarModo('entrar')} />
+                    <Pestana activa={modo === 'registro'} texto="Crear cuenta" onPress={() => cambiarModo('registro')} />
+                  </View>
+                ) : (
+                  <Pressable onPress={() => cambiarModo('entrar')} style={styles.volver}>
+                    <Ionicons name="arrow-back" size={16} color={colores.primario} />
+                    <Text style={styles.enlace}>Volver a iniciar sesión</Text>
+                  </Pressable>
+                )}
 
-          <View style={styles.pie}>
-            <Ionicons name="shield-checkmark-outline" size={14} color={colores.textoTenue} />
-            <Text style={styles.pieTexto}>Tu contraseña se guarda cifrada en el servidor uno y en el servidor dos.</Text>
+                {modo === 'registro' ? (
+                  <>
+                    <Campo icono="person-outline" placeholder="Nombre" value={campos.nombre} onChangeText={cambiar('nombre')} autoComplete="given-name" />
+                    <View style={styles.fila}>
+                      <Campo
+                        style={styles.flex}
+                        placeholder="Apellido paterno"
+                        value={campos.paterno}
+                        onChangeText={cambiar('paterno')}
+                        autoComplete="family-name"
+                      />
+                      <Campo style={styles.flex} placeholder="Apellido materno" value={campos.materno} onChangeText={cambiar('materno')} />
+                    </View>
+                  </>
+                ) : null}
+
+                <Campo
+                  icono="at"
+                  placeholder="Usuario"
+                  value={campos.usuario}
+                  onChangeText={cambiar('usuario')}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  autoComplete="username"
+                  returnKeyType="next"
+                  onSubmitEditing={() => contrasenaRef.current?.focus()}
+                />
+
+                {modo === 'restablecer' ? (
+                  <Campo
+                    icono="key-outline"
+                    placeholder="Código de recuperación (K7QF-M2XP-9TRW)"
+                    value={campos.codigo}
+                    onChangeText={cambiar('codigo')}
+                    autoCapitalize="characters"
+                    autoCorrect={false}
+                  />
+                ) : null}
+
+                <Campo
+                  ref={contrasenaRef}
+                  icono="lock-closed-outline"
+                  placeholder={modo === 'restablecer' ? 'Contraseña nueva' : 'Contraseña'}
+                  value={campos.contrasena}
+                  onChangeText={cambiar('contrasena')}
+                  secureTextEntry={!verContrasena}
+                  autoCapitalize="none"
+                  autoComplete={modo === 'entrar' ? 'current-password' : 'new-password'}
+                  onSubmitEditing={modo === 'entrar' ? enviar : undefined}
+                  accion={ojo}
+                />
+                {modo !== 'entrar' ? (
+                  <>
+                    <Campo
+                      icono="lock-closed-outline"
+                      placeholder="Confirmar contraseña"
+                      value={campos.confirmar}
+                      onChangeText={cambiar('confirmar')}
+                      secureTextEntry={!verContrasena}
+                      autoCapitalize="none"
+                      autoComplete="new-password"
+                      onSubmitEditing={enviar}
+                    />
+                    <Text style={styles.ayuda}>Mínimo 8 caracteres, con al menos una letra y un número.</Text>
+                  </>
+                ) : null}
+
+                {error ? <CajaError texto={error} /> : null}
+
+                <Boton texto={BOTON[modo]} enviando={enviando} onPress={enviar} />
+
+                {modo === 'entrar' ? (
+                  <Pressable onPress={() => cambiarModo('restablecer')} style={styles.olvide}>
+                    <Text style={styles.enlace}>¿Olvidaste tu contraseña?</Text>
+                  </Pressable>
+                ) : null}
+              </>
+            )}
+
+            <View style={styles.pie}>
+              <Ionicons name="shield-checkmark-outline" size={14} color={colores.textoTenue} />
+              <Text style={styles.pieTexto}>Tu contraseña se guarda cifrada en el servidor uno y en el servidor dos.</Text>
+            </View>
           </View>
-        </View>
         </Aparecer>
       </ScrollView>
     </KeyboardAvoidingView>
+  );
+}
+
+function Boton({ texto, enviando, onPress }: { texto: string; enviando: boolean; onPress: () => void }) {
+  return (
+    <Pressable onPress={onPress} disabled={enviando} style={({ pressed }) => [styles.boton, (pressed || enviando) && { opacity: 0.75 }]}>
+      {enviando ? <ActivityIndicator color={colores.fondo} /> : <Text style={styles.botonTexto}>{texto}</Text>}
+    </Pressable>
+  );
+}
+
+function CajaError({ texto }: { texto: string }) {
+  return (
+    <View style={styles.error}>
+      <Ionicons name="alert-circle" size={18} color={colores.error} />
+      <Text style={styles.errorTexto}>{texto}</Text>
+    </View>
+  );
+}
+
+function Aviso({ texto }: { texto: string }) {
+  return (
+    <View style={[styles.error, styles.aviso]}>
+      <Ionicons name="warning-outline" size={18} color={colores.sol} />
+      <Text style={styles.errorTexto}>{texto}</Text>
+    </View>
   );
 }
 
@@ -330,6 +441,47 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     color: colores.fondo,
+  },
+  aviso: {
+    borderColor: colores.sol,
+    backgroundColor: 'rgba(246,196,83,0.08)',
+  },
+  codigoCaja: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: espacio.sm,
+    paddingVertical: espacio.md,
+    borderRadius: radio.sm,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: colores.sol,
+    backgroundColor: 'rgba(246,196,83,0.06)',
+  },
+  codigo: {
+    fontSize: 24,
+    fontWeight: '700',
+    letterSpacing: 2,
+    color: colores.texto,
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+  },
+  ayudaCodigo: {
+    fontSize: 13,
+    color: colores.textoSecundario,
+    textAlign: 'center',
+  },
+  volver: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  olvide: {
+    alignSelf: 'center',
+  },
+  enlace: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colores.primario,
   },
   pie: {
     flexDirection: 'row',

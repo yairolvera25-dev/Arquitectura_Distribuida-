@@ -17,7 +17,9 @@ $accion = New-ScheduledTaskAction -Execute $node -Argument 'src\index.js' -Worki
 $disparador = New-ScheduledTaskTrigger -AtStartup
 $ajustes = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) `
   -ExecutionTimeLimit ([TimeSpan]::Zero)
+# El nombre de la cuenta Network Service cambia con el idioma de Windows; el SID no.
+$cuenta = ([Security.Principal.SecurityIdentifier]'S-1-5-20').Translate([Security.Principal.NTAccount]).Value
 Register-ScheduledTask -TaskName 'API Clima UPP' -Action $accion -Trigger $disparador -Settings $ajustes `
-  -User 'NT AUTHORITY\NETWORK SERVICE' -Force | Out-Null
+  -User $cuenta -Force | Out-Null
 Start-ScheduledTask -TaskName 'API Clima UPP'
 Write-Host 'API registrada como tarea de inicio y en ejecución.'

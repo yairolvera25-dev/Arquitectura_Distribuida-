@@ -13,10 +13,11 @@ export function rutasClima(servidor) {
     res.status(201).json({ ok: true, servidor, id, fechaHora });
   });
 
-  // Últimos registros guardados en este servidor.
+  // Últimos registros guardados en este servidor y cuántos hay en total.
   rutas.get('/', async (req, res) => {
     const limite = Math.min(Math.max(Number.parseInt(req.query.limite, 10) || 50, 1), 200);
-    res.json({ ok: true, servidor, registros: await listarRegistros(limite) });
+    const { registros, total } = await listarRegistros(limite);
+    res.json({ ok: true, servidor, total, registros });
   });
 
   return rutas;

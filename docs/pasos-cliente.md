@@ -28,6 +28,7 @@ Rellena:
 | `EXPO_PUBLIC_USUARIO` | Tu usuario, p. ej. `haideni` (máx. 50 caracteres) |
 | `EXPO_PUBLIC_NOMBRE` | Tu nombre (obligatorio, máx. 50) |
 | `EXPO_PUBLIC_PATERNO` / `MATERNO` | Opcionales |
+| `EXPO_PUBLIC_GEMINI_API_KEY` | La inteligencia de Barbie. Gratis en https://aistudio.google.com/apikey. Sin ella, Barbie solo entiende "guardar en servidor uno/dos" |
 
 Las dos URLs de los servidores ya vienen bien en la plantilla; no las toques.
 
@@ -90,9 +91,14 @@ estás armando.
 ## Cosas que confunden si no las sabes
 
 - **La palabra clave de los comandos es "Barbie", no "guardar".**
-  "guardar en servidor uno" sin decir Barbie se ignora. Después de la palabra
-  clave busca `uno`/`1`/`windows` o `dos`/`2`/`linux`. Si en la misma frase se
-  mencionan los dos servidores, se queda con el primero sin avisar.
+  "guardar en servidor uno" sin decir Barbie se ignora. Con la clave de Gemini,
+  lo que digas después se lo pasa a Gemini tal cual (ver **Comandos de voz** en
+  el README). Sin ella, busca `uno`/`1`/`windows` o `dos`/`2`/`linux`, y si en
+  la misma frase se mencionan los dos servidores se queda con el primero sin avisar.
+
+- **Para guardar un solo dato hacen falta los servidores actualizados.** Un
+  servidor sin actualizar rechaza la fila con un `400` ("Falta el campo
+  temperatura"…) y Barbie lo dice tal cual. El guardado completo funciona igual.
 
 - **`condicion` y `fecha_hora` se descartan.** Los dos servidores los ignoran
   porque no hay columnas para ellos; la fecha la pone la base de datos con el

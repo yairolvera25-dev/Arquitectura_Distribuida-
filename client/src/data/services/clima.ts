@@ -14,7 +14,7 @@ export type RegistroClima = {
 };
 
 // Códigos WMO que devuelve Open-Meteo en `weather_code`
-const CONDICIONES: Record<number, string> = {
+export const CONDICIONES: Record<number, string> = {
   0: 'Despejado',
   1: 'Mayormente despejado',
   2: 'Parcialmente nublado',

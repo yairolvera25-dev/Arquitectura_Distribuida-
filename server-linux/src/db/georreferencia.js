@@ -27,15 +27,18 @@ export async function insertarRegistro(r) {
 }
 
 export async function listarRegistros(limite) {
-  const { rows } = await pool.query(
-    `SELECT "Id" AS id, "Usuario" AS usuario, "Nombre" AS nombre, "Paterno" AS paterno,
-            "Materno" AS materno, "Estado" AS estado, "Municipio" AS municipio,
-            "Latitud" AS latitud, "Longitud" AS longitud, "Temperatura" AS temperatura,
-            "Humedad" AS humedad, "Viento" AS viento, "FechaHora" AS "fechaHora"
-       FROM "Georreferencia"
-      ORDER BY "Id" DESC
-      LIMIT $1`,
-    [limite],
-  );
-  return rows;
+  const [{ rows }, conteo] = await Promise.all([
+    pool.query(
+      `SELECT "Id" AS id, "Usuario" AS usuario, "Nombre" AS nombre, "Paterno" AS paterno,
+              "Materno" AS materno, "Estado" AS estado, "Municipio" AS municipio,
+              "Latitud" AS latitud, "Longitud" AS longitud, "Temperatura" AS temperatura,
+              "Humedad" AS humedad, "Viento" AS viento, "FechaHora" AS "fechaHora"
+         FROM "Georreferencia"
+        ORDER BY "Id" DESC
+        LIMIT $1`,
+      [limite],
+    ),
+    pool.query('SELECT COUNT(*)::int AS total FROM "Georreferencia"'),
+  ]);
+  return { registros: rows, total: conteo.rows[0].total };
 }

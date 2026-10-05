@@ -2,10 +2,11 @@ import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useState } from 'react';
 import { Platform, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
 
-import type { ServidorId } from '../config';
+import { GEMINI, type ServidorId } from '../config';
 import { obtenerClima, type RegistroClima } from '../data/services/clima';
+import { conversarConBarbie } from '../data/services/gemini';
 import { obtenerPronostico, type Pronostico } from '../data/services/pronostico';
-import { guardarClima } from '../data/services/servidores';
+import { consultarRegistros, guardarClima, type DatoClima } from '../data/services/servidores';
 import { ChipEstado, DETALLE_SERVIDOR, ListaServidores, PanelAsistente, type EstadoServidor } from './components/Asistente';
 import { BarraLateral, Logo } from './components/BarraLateral';
 import { Destacados, PronosticoSemana, TarjetaActual } from './components/Clima';
@@ -46,14 +47,13 @@ export default function HomeScreen() {
     cargarClima();
   }, [cargarClima]);
 
-  const onGuardar = useCallback(
-    async (servidor: ServidorId) => {
-      if (!clima) return 'Todavía no tengo el clima para guardar, espera tantito.';
-      const { titulo } = DETALLE_SERVIDOR[servidor];
+  const guardarEn = useCallback(
+    async (servidor: ServidorId, datos?: DatoClima[]) => {
+      if (!clima) throw new Error('Todavía no tengo el clima para guardar, espera tantito.');
       try {
-        await guardarClima(servidor, clima);
+        const guardado = await guardarClima(servidor, clima, datos);
         setServidores((previo) => ({ ...previo, [servidor]: { ok: true, detalle: `Guardado ${hora()}` } }));
-        return `¡Listo! Guardé el clima en el ${titulo.toLowerCase()}.`;
+        return guardado;
       } catch (error) {
         setServidores((previo) => ({ ...previo, [servidor]: { ok: false, detalle: 'Error' } }));
         throw error;
@@ -62,7 +62,21 @@ export default function HomeScreen() {
     [clima],
   );
 
-  const voz = useEscuchaContinua({ onGuardar });
+  const onGuardar = useCallback(
+    async (servidor: ServidorId) => {
+      await guardarEn(servidor);
+      return `¡Listo! Guardé el clima en el ${DETALLE_SERVIDOR[servidor].titulo.toLowerCase()}.`;
+    },
+    [guardarEn],
+  );
+
+  const onPreguntar = useCallback(
+    (texto: string) =>
+      conversarConBarbie(texto, { clima, pronostico }, { guardar: guardarEn, consultar: consultarRegistros }),
+    [clima, pronostico, guardarEn],
+  );
+
+  const voz = useEscuchaContinua({ onGuardar, onPreguntar: GEMINI.apiKey ? onPreguntar : undefined });
 
   const asistente = (
     <PanelAsistente

@@ -35,7 +35,7 @@ Flujo de la aplicación:
 1. Obtiene la geolocalización del usuario.
 2. Consulta el clima: ciudad, temperatura, humedad y condición.
 3. Muestra la información en pantalla junto con fecha y hora.
-4. Escucha e interpreta un comando de voz.
+4. Escucha a la asistente Barbie, que con Gemini entiende órdenes y preguntas en lenguaje natural.
 5. Envía el registro al servicio web del servidor elegido, que lo guarda en su base de datos.
 6. Confirma al usuario en qué servidor se guardó.
 
@@ -58,6 +58,7 @@ Cada quien trabaja solo en su carpeta para evitar conflictos al hacer push.
 | Clima | Open-Meteo |
 | Reconocimiento de voz | `expo-speech-recognition` (`es-MX`) |
 | Confirmación por voz | `expo-speech` |
+| Inteligencia de Barbie | Gemini (`gemini-3.8-flash`, API REST `generateContent`) |
 | Servicio web (ambos servidores) | Node.js + Express |
 | BD Servidor 1 | SQL Server Express (`mssql`) |
 | BD Servidor 2 | PostgreSQL (`pg`) |
@@ -73,8 +74,9 @@ client/                 App móvil (React Native + Expo)
     config.ts           URLs de los servidores y API key
     services/
       clima.ts          Geolocalización, ciudad y consulta a Open-Meteo
-      comandos.ts       Interpretación del comando de voz
-      servidores.ts     Envío del registro al servidor elegido
+      comandos.ts       Palabra clave "Barbie" y comando de voz sin Gemini
+      gemini.ts         Barbie con Gemini: conversación y herramientas (guardar, consultar)
+      servidores.ts     Guardar y consultar registros en cada servidor
 server-windows/         Servicio web del Servidor 1 (Windows Server + SQL Server)
   src/
     routes/             Endpoints (/api/clima)
@@ -122,9 +124,11 @@ Edita `client/.env` con los datos reales:
 EXPO_PUBLIC_SERVIDOR_WINDOWS_URL=http://IP_DE_LA_VM_WINDOWS:3000
 EXPO_PUBLIC_SERVIDOR_LINUX_URL=http://IP_DE_LA_VM_LINUX:3000
 EXPO_PUBLIC_API_KEY=la-misma-clave-que-usan-los-servidores
+EXPO_PUBLIC_GEMINI_API_KEY=clave-de-https://aistudio.google.com/apikey
 ```
 
 - Las URLs van sin diagonal al final.
+- Sin `EXPO_PUBLIC_GEMINI_API_KEY` la app funciona igual, pero Barbie solo entiende "guardar en servidor uno/dos".
 - El `.env` no se sube al repo.
 - Después de cambiarlo hay que reiniciar el servidor de Expo.
 
@@ -166,7 +170,9 @@ npx expo-doctor       # revisa dependencias y configuración
 | "…La base de datos no está disponible" | El servicio corre pero no entra a la BD: revisa `DB_PASSWORD`, que el SGBD esté encendido y, en Windows, TCP/IP en el puerto 1433 |
 | "Falta configurar la URL de…" | No existe el `.env` o no se reinició Expo después de editarlo |
 | "…respondió 401" | La API key del `.env` no coincide con la del servidor |
-| "No entendí el comando" | La frase debe incluir "guardar" y un solo servidor |
+| "La API key de Gemini no es válida" / "Gemini rechazó la API key" | Revisa `EXPO_PUBLIC_GEMINI_API_KEY` y reinicia Expo |
+| "Gemini no tiene el modelo…" | Google retiró ese modelo: cambia `EXPO_PUBLIC_GEMINI_MODELO` por uno de https://ai.google.dev/gemini-api/docs/models |
+| "Se acabó la cuota gratis de Gemini" | Límite por minuto del plan gratuito; espera un poco. Mientras, "Barbie, guarda en el servidor uno" sigue funcionando |
 | La app no abre en Expo Go | Es lo esperado; usa `npx expo run:android` |
 | `SDK location not found` al compilar | Falta definir `ANDROID_HOME` |
 
@@ -301,7 +307,7 @@ Ambos servidores exponen lo mismo, para que el cliente solo cambie la URL base.
 }
 ```
 
-- Obligatorios: `usuario`, `nombre`, `latitud`, `longitud`, `temperatura` y `humedad`. Los campos de más (`ciudad`, `condicion`, `fecha_hora`) se ignoran.
+- Obligatorios: solo `usuario` y `nombre`. Los datos del clima son opcionales para poder guardar uno solo ("Barbie, guarda solo la temperatura"); lo que no se manda queda en `NULL`. `latitud` y `longitud` van juntas o ninguna. Los campos de más (`ciudad`, `condicion`, `fecha_hora`) se ignoran.
 - `FechaHora` la pone la base de datos al insertar.
 - Datos del usuario: salen de `EXPO_PUBLIC_USUARIO`, `EXPO_PUBLIC_NOMBRE`, `EXPO_PUBLIC_PATERNO` y `EXPO_PUBLIC_MATERNO` en `client/.env`.
 
@@ -314,11 +320,32 @@ Respuestas:
 | `401` | API key incorrecta | `{ "ok": false, "error": "API key inválida." }` |
 | `503` | La BD no responde | `{ "ok": false, "error": "La base de datos no está disponible." }` |
 
-`GET /api/clima?limite=50` (header `x-api-key`) devuelve los últimos registros de ese servidor.
+`GET /api/clima?limite=50` (header `x-api-key`) devuelve los últimos registros de ese servidor y cuántos tiene en total: `{ "ok": true, "servidor": "linux", "total": 230, "registros": [ … ] }`.
 
 `GET /api/salud` (sin API key) indica si el servicio y su base de datos responden.
 
 ## Comandos de voz
+
+Todo empieza con la palabra clave **"Barbie"**. Lo que se dice después depende de si hay `EXPO_PUBLIC_GEMINI_API_KEY`.
+
+### Con Gemini
+
+La app espera a que termines la frase (o 1.5 s de silencio) y se la pasa a Gemini junto con la fecha, la hora, el clima actual y el pronóstico. Gemini contesta en voz alta y, cuando hace falta, usa dos herramientas que ejecuta la app: `guardar_clima` y `consultar_registros`.
+
+| Lo que se dice | Qué hace |
+|---|---|
+| "Barbie, guarda en el servidor uno" | guarda el registro completo en `windows` |
+| "Barbie, guarda solo la temperatura en el dos" | guarda una fila con la temperatura; lo demás queda en `NULL` |
+| "Barbie, guarda la hora en los dos servidores" | una fila en cada servidor con quién guardó y la fecha y hora |
+| "Barbie, ¿qué guardé en el servidor dos?" | lee los últimos registros y el total, y los resume |
+| "Barbie, ¿y en el uno?" | recuerda las últimas 6 preguntas |
+| "Barbie, ¿va a llover mañana?" / "¿qué hora es?" | contesta con el pronóstico o el reloj del teléfono |
+| "Barbie, cuéntame un chiste" | platica de cualquier cosa |
+| "Barbie, guarda el clima" | pregunta en qué servidor; se contesta sin repetir "Barbie" |
+
+Si Gemini no responde (sin internet, sin cuota, clave mala), solo se acepta la orden directa "Barbie, guarda en el servidor uno/dos", que guarda el registro completo. Una pregunta como "¿qué hay en el servidor uno?" nunca se toma como guardado.
+
+### Sin Gemini
 
 | Comando | Destino |
 |---|---|

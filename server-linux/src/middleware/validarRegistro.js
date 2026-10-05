@@ -9,11 +9,12 @@ const TEXTOS = {
 };
 
 // [mínimo, máximo, obligatorio]
+// Ninguno es obligatorio: Barbie puede guardar un solo dato ("guarda solo la temperatura").
 const NUMEROS = {
-  latitud: [-90, 90, true],
-  longitud: [-180, 180, true],
-  temperatura: [-90, 70, true],
-  humedad: [0, 100, true],
+  latitud: [-90, 90, false],
+  longitud: [-180, 180, false],
+  temperatura: [-90, 70, false],
+  humedad: [0, 100, false],
   viento: [0, 500, false],
 };
 
@@ -54,6 +55,11 @@ export function validarRegistro(req, res, next) {
     } else {
       registro[campo] = valor;
     }
+  }
+
+  // Una coordenada sin la otra no ubica nada.
+  if ((registro.latitud === null) !== (registro.longitud === null)) {
+    errores.push('"latitud" y "longitud" van juntas.');
   }
 
   if (errores.length) {

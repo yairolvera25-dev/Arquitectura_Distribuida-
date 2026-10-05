@@ -21,6 +21,12 @@ export const SERVIDORES: Record<ServidorId, Servidor> = {
 
 export const API_KEY = process.env.EXPO_PUBLIC_API_KEY ?? '';
 
+// Gemini, la inteligencia de Barbie. Sin API key, Barbie solo entiende "guardar en servidor uno/dos".
+export const GEMINI = {
+  apiKey: process.env.EXPO_PUBLIC_GEMINI_API_KEY ?? '',
+  modelo: process.env.EXPO_PUBLIC_GEMINI_MODELO || 'gemini-3.8-flash',
+};
+
 // Datos de quien guarda los registros (campos Usuario, Nombre, Paterno y Materno de Georreferencia).
 export const USUARIO = {
   usuario: process.env.EXPO_PUBLIC_USUARIO ?? '',

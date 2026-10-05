@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
-import { SERVIDORES, type ServidorId } from '../../config';
+import { GEMINI, SERVIDORES, type ServidorId } from '../../config';
 import type { EstadoVoz } from '../hooks/useEscuchaContinua';
 import { colores, espacio, radio } from '../theme';
 import { OrbeVoz } from './OrbeVoz';
@@ -14,12 +14,19 @@ export const DETALLE_SERVIDOR: Record<ServidorId, { titulo: string; subtitulo: s
   linux: { titulo: 'Servidor dos', subtitulo: 'Ubuntu Server', numero: '2' },
 };
 
+const CON_GEMINI = Boolean(GEMINI.apiKey);
+
 const TEXTO_ESTADO: Record<EstadoVoz, { titulo: string; ayuda: string }> = {
   apagado: { titulo: 'Micrófono apagado', ayuda: 'Toca el círculo para empezar a escuchar' },
   sinSoporte: { titulo: 'Voz no disponible', ayuda: 'Puedes guardar tocando un servidor' },
-  esperando: { titulo: 'Di «Barbie» para activar', ayuda: '«Barbie, guardar en servidor uno»' },
-  activo: { titulo: 'Te escucho ✨', ayuda: '¿Servidor uno o servidor dos?' },
-  procesando: { titulo: 'Guardando…', ayuda: 'Enviando el registro al servidor' },
+  esperando: {
+    titulo: 'Di «Barbie» para activar',
+    ayuda: CON_GEMINI ? '«Barbie, ¿qué guardé en el servidor dos?»' : '«Barbie, guardar en servidor uno»',
+  },
+  activo: { titulo: 'Te escucho ✨', ayuda: CON_GEMINI ? 'Pídeme o pregúntame lo que quieras' : '¿Servidor uno o servidor dos?' },
+  procesando: CON_GEMINI
+    ? { titulo: 'Un momento…', ayuda: 'Barbie está en eso' }
+    : { titulo: 'Guardando…', ayuda: 'Enviando el registro al servidor' },
 };
 
 export const microfonoApagado = (estado: EstadoVoz) => estado === 'apagado' || estado === 'sinSoporte';

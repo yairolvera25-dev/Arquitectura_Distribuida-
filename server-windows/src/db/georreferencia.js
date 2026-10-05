@@ -31,17 +31,20 @@ export async function insertarRegistro(r) {
 
 export async function listarRegistros(limite) {
   const pool = await obtenerPool();
-  const resultado = await pool
-    .request()
-    .input('limite', sql.Int, limite)
-    .query(`
-      SELECT TOP (@limite)
-             Id AS id, Usuario AS usuario, Nombre AS nombre, Paterno AS paterno,
-             Materno AS materno, Estado AS estado, Municipio AS municipio,
-             Latitud AS latitud, Longitud AS longitud, Temperatura AS temperatura,
-             Humedad AS humedad, Viento AS viento, FechaHora AS fechaHora
-        FROM dbo.Georreferencia
-       ORDER BY Id DESC
-    `);
-  return resultado.recordset;
+  const [resultado, conteo] = await Promise.all([
+    pool
+      .request()
+      .input('limite', sql.Int, limite)
+      .query(`
+        SELECT TOP (@limite)
+               Id AS id, Usuario AS usuario, Nombre AS nombre, Paterno AS paterno,
+               Materno AS materno, Estado AS estado, Municipio AS municipio,
+               Latitud AS latitud, Longitud AS longitud, Temperatura AS temperatura,
+               Humedad AS humedad, Viento AS viento, FechaHora AS fechaHora
+          FROM dbo.Georreferencia
+         ORDER BY Id DESC
+      `),
+    pool.request().query('SELECT COUNT(*) AS total FROM dbo.Georreferencia'),
+  ]);
+  return { registros: resultado.recordset, total: conteo.recordset[0].total };
 }

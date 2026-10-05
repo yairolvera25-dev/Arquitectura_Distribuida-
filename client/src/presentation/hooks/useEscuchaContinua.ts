@@ -4,18 +4,20 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 
 import type { ServidorId } from '../../config';
-import { interpretarComando } from '../../data/services/comandos';
+import { despuesDeLaPalabraClave, interpretarComando, ordenDeGuardar } from '../../data/services/comandos';
 import { hablarComoBarbie, prepararVoz } from '../vozBarbie';
 
 export type EstadoVoz =
   | 'apagado' // El usuario pausó el micrófono o no hay permiso
   | 'sinSoporte' // El dispositivo o navegador no tiene reconocimiento de voz (p. ej. Firefox)
   | 'esperando' // Escuchando en segundo plano, esperando "Barbie"
-  | 'activo' // Ya se dijo "Barbie", esperando "servidor uno/dos"
-  | 'procesando'; // Guardando y respondiendo por voz
+  | 'activo' // Ya se dijo "Barbie", esperando el resto (el servidor, o la pregunta con Gemini)
+  | 'procesando'; // Guardando o pensando, y respondiendo por voz
 
 // Tras decir "Barbie", cuánto tiempo se espera a que se diga el servidor.
 const VENTANA_ACTIVACION_MS = 8000;
+// Con Gemini, si el reconocedor no marca el final de la frase, se da por terminada tras este silencio.
+const SILENCIO_MS = 1500;
 const RETRASO_REINICIO_MS = 150;
 const RETRASO_REINICIO_ERROR_MS = 1500;
 
@@ -38,26 +40,34 @@ function hayReconocimiento(): boolean {
 type Opciones = {
   /** Guarda en el servidor indicado y devuelve el mensaje que se dirá en voz alta. */
   onGuardar: (servidor: ServidorId) => Promise<string>;
+  /**
+   * Con Gemini: responde lo que se le pidió a Barbie y devuelve lo que dirá en voz alta.
+   * Sin esta opción, Barbie solo entiende "guardar en servidor uno/dos".
+   */
+  onPreguntar?: (texto: string) => Promise<string>;
 };
 
-export function useEscuchaContinua({ onGuardar }: Opciones) {
+export function useEscuchaContinua({ onGuardar, onPreguntar }: Opciones) {
   const [estado, setEstado] = useState<EstadoVoz>('apagado');
   const [transcripcion, setTranscripcion] = useState('');
   const [mensaje, setMensaje] = useState('');
 
   const habilitado = useRef(false); // El usuario quiere que se escuche
   const pausado = useRef(false); // Pausa temporal mientras la app habla/guarda
-  const guardando = useRef(false);
+  const ocupado = useRef(false); // Guardando o esperando a Gemini
   const corriendo = useRef(false); // Hay una sesión del reconocedor abierta
   const activado = useRef(false);
   const temporizadorActivacion = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const temporizadorSilencio = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retrasoReinicio = useRef(RETRASO_REINICIO_MS);
   const erroresSeguidos = useRef(0);
   const onGuardarRef = useRef(onGuardar);
+  const onPreguntarRef = useRef(onPreguntar);
 
   useEffect(() => {
     onGuardarRef.current = onGuardar;
-  }, [onGuardar]);
+    onPreguntarRef.current = onPreguntar;
+  }, [onGuardar, onPreguntar]);
 
   const iniciarReconocedor = useCallback(() => {
     if (!habilitado.current || pausado.current || corriendo.current) return;
@@ -66,13 +76,15 @@ export function useEscuchaContinua({ onGuardar }: Opciones) {
       lang: 'es-MX',
       interimResults: true,
       continuous: true,
-      contextualStrings: ['Barbie', 'servidor uno', 'servidor dos', 'guardar'],
+      contextualStrings: ['Barbie', 'servidor uno', 'servidor dos', 'guardar', 'temperatura', 'humedad', 'registros'],
     });
   }, []);
 
   const desactivar = useCallback(() => {
     if (temporizadorActivacion.current) clearTimeout(temporizadorActivacion.current);
+    if (temporizadorSilencio.current) clearTimeout(temporizadorSilencio.current);
     temporizadorActivacion.current = null;
+    temporizadorSilencio.current = null;
     activado.current = false;
   }, []);
 
@@ -119,8 +131,8 @@ export function useEscuchaContinua({ onGuardar }: Opciones) {
 
   const guardar = useCallback(
     async (servidor: ServidorId) => {
-      if (guardando.current) return;
-      guardando.current = true;
+      if (ocupado.current) return;
+      ocupado.current = true;
       desactivar();
       setEstado('procesando');
 
@@ -140,9 +152,41 @@ export function useEscuchaContinua({ onGuardar }: Opciones) {
       setTranscripcion('');
       setEstado(habilitado.current ? 'esperando' : 'apagado');
       await decir(respuesta);
-      guardando.current = false;
+      ocupado.current = false;
     },
     [decir, desactivar],
+  );
+
+  const preguntar = useCallback(
+    async (texto: string) => {
+      const responder = onPreguntarRef.current;
+      if (ocupado.current || !responder) return;
+      ocupado.current = true;
+      desactivar();
+      setEstado('procesando');
+
+      let respuesta: string;
+      try {
+        respuesta = await responder(texto);
+      } catch (error) {
+        // Sin Gemini (sin internet, sin cuota…) la orden directa de guardar sigue funcionando.
+        const servidor = ordenDeGuardar(texto);
+        if (servidor) {
+          ocupado.current = false;
+          await guardar(servidor);
+          return;
+        }
+        respuesta = error instanceof Error ? error.message : 'No pude pensar una respuesta.';
+      }
+
+      setTranscripcion('');
+      setEstado(habilitado.current ? 'esperando' : 'apagado');
+      await decir(respuesta);
+      ocupado.current = false;
+      // Si Barbie preguntó algo ("¿en qué servidor?"), se le contesta sin volver a decir su nombre.
+      if (habilitado.current && /\?\s*$/.test(respuesta)) activar();
+    },
+    [activar, decir, desactivar, guardar],
   );
 
   useSpeechRecognitionEvent('start', () => {
@@ -158,10 +202,28 @@ export function useEscuchaContinua({ onGuardar }: Opciones) {
   });
 
   useSpeechRecognitionEvent('result', (evento) => {
-    if (pausado.current || guardando.current) return;
+    if (pausado.current || ocupado.current) return;
     erroresSeguidos.current = 0;
     const texto = evento.results[0]?.transcript ?? '';
     if (!texto) return;
+
+    if (onPreguntarRef.current) {
+      const peticion = despuesDeLaPalabraClave(texto, activado.current);
+      if (peticion === null) {
+        // Conversación que no es para la app: no se muestra ni se procesa.
+        if (evento.isFinal) setTranscripcion('');
+        return;
+      }
+      setTranscripcion(texto);
+      if (peticion && evento.isFinal) {
+        preguntar(texto);
+        return;
+      }
+      // Todavía se está hablando: la ventana se alarga y se espera el final de la frase.
+      activar();
+      if (peticion) temporizadorSilencio.current = setTimeout(() => preguntar(texto), SILENCIO_MS);
+      return;
+    }
 
     const resultado = interpretarComando(texto, activado.current);
 

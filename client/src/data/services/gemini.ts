@@ -137,37 +137,78 @@ function instrucciones(contexto: ContextoBarbie): string {
   ].join('\n');
 }
 
-function mensajeDeError(status: number, cuerpo: { error?: { message?: string } } | null): string {
+function mensajeDeError(status: number, modelo: string, cuerpo: { error?: { message?: string } } | null): string {
   const detalle = cuerpo?.error?.message ?? '';
   if (status === 400 && /api key/i.test(detalle)) return 'La API key de Gemini no es válida; revisa EXPO_PUBLIC_GEMINI_API_KEY.';
   if (status === 403) return 'Gemini rechazó la API key; revisa EXPO_PUBLIC_GEMINI_API_KEY.';
-  if (status === 404) return `Gemini no tiene el modelo ${GEMINI.modelo}; revisa EXPO_PUBLIC_GEMINI_MODELO.`;
+  if (status === 404) return `Gemini no tiene el modelo ${modelo}; revisa EXPO_PUBLIC_GEMINI_MODELO.`;
   if (status === 429) return 'Se acabó la cuota gratis de Gemini por ahora; intenta en un minuto.';
   if (status >= 500) return 'Gemini está saturado; intenta otra vez en un momento.';
   console.warn('Gemini respondió', status, detalle);
   return `Gemini respondió ${status}.`;
 }
 
+// Los modelos 3.x usan `thinkingLevel` y los 2.5 `thinkingBudget`; cada uno rechaza el del otro con un 400.
+function razonamientoMinimo(modelo: string) {
+  return /^gemini-[3-9]/.test(modelo) ? { thinkingLevel: 'low' } : { thinkingBudget: 0 };
+}
+
+// Modelo de respaldo: si el principal está saturado, no existe, se acabó su cuota o tarda
+// más de TIEMPO_PRINCIPAL_MS, se repite la petición con el respaldo. Después se usa el
+// respaldo directo durante PAUSA_PRINCIPAL_MS para no esperar al principal en cada frase.
+const TIEMPO_PRINCIPAL_MS = 8000;
+const PAUSA_PRINCIPAL_MS = 2 * 60 * 1000;
+let principalEnPausaHasta = 0;
+
+const convieneRespaldo = (status: number) => status === 404 || status === 429 || status >= 500;
+
+function pedir(modelo: string, contenidos: Contenido[], contexto: ContextoBarbie, tiempoLimite: number) {
+  return fetch(`${URL_MODELOS}/${modelo}:generateContent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI.apiKey },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: instrucciones(contexto) }] },
+      contents: contenidos,
+      tools: HERRAMIENTAS,
+      // Poco razonamiento: en una conversación por voz importa más contestar rápido.
+      generationConfig: { thinkingConfig: razonamientoMinimo(modelo) },
+    }),
+    signal: AbortSignal.timeout(tiempoLimite),
+  });
+}
+
 async function generar(contenidos: Contenido[], contexto: ContextoBarbie): Promise<Contenido> {
-  let respuesta: Response;
-  try {
-    respuesta = await fetch(`${URL_MODELOS}/${GEMINI.modelo}:generateContent`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI.apiKey },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: instrucciones(contexto) }] },
-        contents: contenidos,
-        tools: HERRAMIENTAS,
-        // Poco razonamiento: en una conversación por voz importa más contestar rápido.
-        generationConfig: { thinkingConfig: { thinkingLevel: 'low' } },
-      }),
-      signal: AbortSignal.timeout(TIEMPO_LIMITE_MS),
-    });
-  } catch {
+  const respaldo = GEMINI.respaldo && GEMINI.respaldo !== GEMINI.modelo ? GEMINI.respaldo : '';
+  const probarPrincipal = !respaldo || Date.now() >= principalEnPausaHasta;
+  let modelo = probarPrincipal ? GEMINI.modelo : respaldo;
+  let respuesta: Response | null = null;
+
+  if (probarPrincipal) {
+    try {
+      respuesta = await pedir(modelo, contenidos, contexto, respaldo ? TIEMPO_PRINCIPAL_MS : TIEMPO_LIMITE_MS);
+    } catch {
+      respuesta = null; // Sin conexión o tardó demasiado
+    }
+  }
+
+  if (respaldo && (!respuesta || (modelo !== respaldo && convieneRespaldo(respuesta.status)))) {
+    if (modelo !== respaldo) {
+      console.warn(`Gemini ${modelo} no respondió (${respuesta?.status ?? 'tiempo agotado'}); uso ${respaldo}.`);
+      principalEnPausaHasta = Date.now() + PAUSA_PRINCIPAL_MS;
+    }
+    modelo = respaldo;
+    try {
+      respuesta = await pedir(modelo, contenidos, contexto, TIEMPO_LIMITE_MS);
+    } catch {
+      respuesta = null;
+    }
+  }
+
+  if (!respuesta) {
     throw new Error('No pude conectarme con Gemini; revisa el internet.');
   }
   if (!respuesta.ok) {
-    throw new Error(mensajeDeError(respuesta.status, await respuesta.json().catch(() => null)));
+    throw new Error(mensajeDeError(respuesta.status, modelo, await respuesta.json().catch(() => null)));
   }
   const datos = await respuesta.json();
   const partes: Parte[] | undefined = datos.candidates?.[0]?.content?.parts;

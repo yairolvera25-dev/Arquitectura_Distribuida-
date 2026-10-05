@@ -25,6 +25,8 @@ export const API_KEY = process.env.EXPO_PUBLIC_API_KEY ?? '';
 export const GEMINI = {
   apiKey: process.env.EXPO_PUBLIC_GEMINI_API_KEY ?? '',
   modelo: process.env.EXPO_PUBLIC_GEMINI_MODELO || 'gemini-3.8-flash',
+  // Se usa solo si el principal falla (saturado, sin cuota, no existe o muy lento). Vacío = sin respaldo.
+  respaldo: process.env.EXPO_PUBLIC_GEMINI_MODELO_RESPALDO ?? 'gemini-2.5-flash',
 };
 
 // Datos de quien guarda los registros (campos Usuario, Nombre, Paterno y Materno de Georreferencia).

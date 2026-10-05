@@ -20,3 +20,11 @@ export const SERVIDORES: Record<ServidorId, Servidor> = {
 };
 
 export const API_KEY = process.env.EXPO_PUBLIC_API_KEY ?? '';
+
+// Datos de quien guarda los registros (campos Usuario, Nombre, Paterno y Materno de Georreferencia).
+export const USUARIO = {
+  usuario: process.env.EXPO_PUBLIC_USUARIO ?? '',
+  nombre: process.env.EXPO_PUBLIC_NOMBRE ?? '',
+  paterno: process.env.EXPO_PUBLIC_PATERNO ?? '',
+  materno: process.env.EXPO_PUBLIC_MATERNO ?? '',
+};

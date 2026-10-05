@@ -1,0 +1,14 @@
+{
+  "name": "Clima Distribuido",
+  "short_name": "Clima",
+  "description": "Guarda el clima en el servidor uno o dos con el comando de voz «Barbie».",
+  "lang": "es-MX",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0A0D12",
+  "theme_color": "#0A0D12",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

@@ -2,8 +2,11 @@ import * as Location from 'expo-location';
 
 export type RegistroClima = {
   ciudad: string;
+  estado: string | null;
+  municipio: string | null;
   temperatura: number;
   humedad: number;
+  viento: number; // km/h
   condicion: string;
   fecha_hora: string;
   latitud: number;
@@ -42,12 +45,34 @@ const CONDICIONES: Record<number, string> = {
   99: 'Tormenta con granizo intenso',
 };
 
-async function obtenerCiudad(latitud: number, longitud: number): Promise<string> {
+type Lugar = { ciudad: string; estado: string | null; municipio: string | null };
+
+// En web no existe reverseGeocodeAsync: se usa un servicio público sin API key.
+async function lugarDesdeInternet(latitud: number, longitud: number): Promise<Lugar> {
+  const url =
+    'https://api.bigdatacloud.net/data/reverse-geocode-client' +
+    `?latitude=${latitud}&longitude=${longitud}&localityLanguage=es`;
+  const respuesta = await fetch(url);
+  if (!respuesta.ok) throw new Error(`Geocodificación respondió ${respuesta.status}.`);
+  const datos = await respuesta.json();
+  const municipio = datos.city || datos.locality || null;
+  return { ciudad: municipio ?? 'Desconocida', estado: datos.principalSubdivision || null, municipio };
+}
+
+async function obtenerLugar(latitud: number, longitud: number): Promise<Lugar> {
   try {
     const [lugar] = await Location.reverseGeocodeAsync({ latitude: latitud, longitude: longitud });
-    return lugar?.city ?? lugar?.subregion ?? lugar?.region ?? 'Desconocida';
+    if (lugar) {
+      const municipio = lugar.city ?? lugar.subregion ?? null;
+      return { ciudad: municipio ?? lugar.region ?? 'Desconocida', estado: lugar.region ?? null, municipio };
+    }
   } catch {
-    return 'Desconocida';
+    // Sigue con el servicio en línea
+  }
+  try {
+    return await lugarDesdeInternet(latitud, longitud);
+  } catch {
+    return { ciudad: 'Desconocida', estado: null, municipio: null };
   }
 }
 
@@ -62,17 +87,18 @@ export async function obtenerClima(): Promise<RegistroClima> {
 
   const url =
     `https://api.open-meteo.com/v1/forecast?latitude=${latitud}&longitude=${longitud}` +
-    '&current=temperature_2m,relative_humidity_2m,weather_code';
-  const [respuesta, ciudad] = await Promise.all([fetch(url), obtenerCiudad(latitud, longitud)]);
+    '&current=temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code';
+  const [respuesta, lugar] = await Promise.all([fetch(url), obtenerLugar(latitud, longitud)]);
   if (!respuesta.ok) {
     throw new Error(`Open-Meteo respondió ${respuesta.status}.`);
   }
   const { current } = await respuesta.json();
 
   return {
-    ciudad,
+    ...lugar,
     temperatura: current.temperature_2m,
     humedad: current.relative_humidity_2m,
+    viento: current.wind_speed_10m,
     condicion: CONDICIONES[current.weather_code] ?? 'Desconocida',
     fecha_hora: new Date().toISOString(),
     latitud,

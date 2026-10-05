@@ -7,8 +7,8 @@ Examen Parcial 1 de Seguridad Informática (Universidad Politécnica de Pachuca)
 | Componente | Estado |
 |---|---|
 | `client/` | Código base listo; falta probarlo en un teléfono |
-| `server-windows/` | Pendiente (solo carpetas) |
-| `server-linux/` | Pendiente (solo carpetas) |
+| `server-windows/` | Código listo; falta instalarlo en la VM Windows |
+| `server-linux/` | Código listo y probado con PostgreSQL; falta instalarlo en la VM Ubuntu |
 | `docs/` | Pendiente |
 
 ## Arquitectura
@@ -160,7 +160,8 @@ npx expo-doctor       # revisa dependencias y configuración
 
 | Síntoma | Causa probable |
 |---|---|
-| "No se pudo conectar con…" | El teléfono no alcanza la VM: revisa la IP del `.env`, que estén en la misma red o en Tailscale, y el puerto 3000 en el firewall |
+| "No se pudo conectar con…" | El teléfono no alcanza la VM: revisa que ZeroTier esté conectado en el teléfono, la IP del `.env`, que el servicio esté corriendo y el puerto 3000 en el firewall |
+| "…La base de datos no está disponible" | El servicio corre pero no entra a la BD: revisa `DB_PASSWORD`, que el SGBD esté encendido y, en Windows, TCP/IP en el puerto 1433 |
 | "Falta configurar la URL de…" | No existe el `.env` o no se reinició Expo después de editarlo |
 | "…respondió 401" | La API key del `.env` no coincide con la del servidor |
 | "No entendí el comando" | La frase debe incluir "guardar" y un solo servidor |
@@ -169,13 +170,79 @@ npx expo-doctor       # revisa dependencias y configuración
 
 ## Servidores: instalación y ejecución
 
-Pendiente. Esta sección se completa cuando exista el código de `server-windows/` y `server-linux/`. El plan es:
+Cada VM corre su propio servicio web (Node.js + Express, puerto `3000`) que recibe los registros de la app y los guarda en su base de datos **local**. La base de datos nunca se expone a la app; solo el servicio web.
 
-1. Instalar Node.js y el motor de base de datos en la VM.
-2. Ejecutar el script de `sql/` para crear la base, la tabla y el usuario con permisos mínimos.
-3. Copiar `.env.example` a `.env` con las credenciales de la BD y la API key.
-4. `npm install` y `npm start`.
-5. Abrir el puerto 3000 en el firewall.
+| | Servidor uno | Servidor dos |
+|---|---|---|
+| VM | Windows Server 2022 (`SRV-WIN-UPP`) | Ubuntu Server 24.04 (`SRV-UBUNTU-UPP`) |
+| IP ZeroTier | `10.191.84.109` | `10.191.84.219` |
+| SGBD | SQL Server Express (`localhost:1433`) | PostgreSQL (`127.0.0.1:5432`) |
+| Usuario de BD del servicio | `upp_api` (solo `SELECT` e `INSERT`) | `upp_api` (solo `SELECT` e `INSERT`) |
+
+La **API key** debe ser la misma en `client/.env` (`EXPO_PUBLIC_API_KEY`) y en el `.env` de ambos servidores (`API_KEY`). Se genera una vez con `openssl rand -hex 24` y se comparte por un medio privado, nunca en el repo.
+
+### Servidor dos — Ubuntu Server (`server-linux/`)
+
+Por SSH en la VM Ubuntu:
+
+```bash
+# 1. Node.js 22 LTS
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt install -y nodejs git
+
+# 2. Código en /opt/clima-api, con un usuario del sistema sin shell
+sudo useradd --system --home /opt/clima-api --shell /usr/sbin/nologin clima-api
+sudo git clone <url-del-repo> /tmp/repo
+sudo cp -r /tmp/repo/server-linux /opt/clima-api
+cd /opt/clima-api && sudo npm ci --omit=dev
+
+# 3. Usuario de BD con permisos mínimos (la tabla UPP.Georreferencia ya existe)
+sudo -u postgres psql -d UPP -f sql/02_usuario_api.sql
+sudo -u postgres psql -c "\password upp_api"
+
+# 4. Configuración (pon la API key y la contraseña de upp_api)
+sudo cp .env.example .env && sudo nano .env
+sudo chown -R root:clima-api /opt/clima-api && sudo chmod 640 .env
+
+# 5. Firewall: puerto 3000 solo desde la red del equipo
+sudo ufw allow from 10.191.84.0/24 to any port 3000 proto tcp
+
+# 6. Servicio que arranca solo con el servidor
+sudo cp deploy/clima-api.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now clima-api
+systemctl status clima-api        # debe decir active (running)
+journalctl -u clima-api -f        # ver los registros que llegan
+```
+
+### Servidor uno — Windows Server (`server-windows/`)
+
+1. **SQL Server:** en SQL Server Configuration Manager confirma que TCP/IP está habilitado para `SQLEXPRESS` con el puerto fijo `1433` (es el que se abrió en la Actividad 2).
+2. **Usuario de BD:** abre `sql/02_usuario_api.sql` en SSMS, reemplaza `<CONTRASEÑA_ROBUSTA>`, ejecútalo y cierra sin guardar.
+3. **Node.js:** instala Node.js 22 LTS desde https://nodejs.org.
+4. **Código:** copia la carpeta `server-windows` a `C:\clima-api`. Tiene que estar fuera de `C:\Users`, porque el servicio corre con la cuenta *NETWORK SERVICE*, que no puede leer los perfiles de usuario.
+5. **Configuración:** en PowerShell, dentro de `C:\clima-api`:
+   ```powershell
+   npm ci --omit=dev
+   copy .env.example .env
+   notepad .env      # API key y contraseña de upp_api
+   npm start         # prueba manual; Ctrl+C para detener
+   ```
+6. **Firewall y arranque automático:** en PowerShell **como Administrador**:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File deploy\instalar.ps1
+   ```
+   Crea la regla de firewall `API Clima UPP 3000`, que solo admite tráfico de `10.191.84.0/24`, y una tarea programada que inicia la API al encender el servidor.
+
+### Verificar desde el cliente
+
+Con ZeroTier conectado:
+
+```bash
+curl http://10.191.84.109:3000/api/salud   # {"ok":true,"servidor":"windows","baseDeDatos":"conectada"}
+curl http://10.191.84.219:3000/api/salud   # {"ok":true,"servidor":"linux","baseDeDatos":"conectada"}
+curl -H "x-api-key: TU_CLAVE" http://10.191.84.219:3000/api/clima   # últimos registros
+```
 
 ## Contrato de los servicios
 
@@ -185,21 +252,36 @@ Ambos servidores exponen lo mismo, para que el cliente solo cambie la URL base.
 
 ```json
 {
-  "ciudad": "Pachuca",
+  "usuario": "haideni",
+  "nombre": "Hai Deni",
+  "paterno": "Moctezuma",
+  "materno": "Perez",
+  "estado": "Hidalgo",
+  "municipio": "Pachuca de Soto",
+  "latitud": 20.1011,
+  "longitud": -98.7591,
   "temperatura": 18.4,
   "humedad": 62,
-  "condicion": "Nublado",
-  "fecha_hora": "2026-10-02T18:49:00.000Z",
-  "latitud": 20.1011,
-  "longitud": -98.7591
+  "viento": 7.9
 }
 ```
 
-`fecha_hora` va en formato ISO 8601 en UTC.
+- Obligatorios: `usuario`, `nombre`, `latitud`, `longitud`, `temperatura` y `humedad`. Los campos de más (`ciudad`, `condicion`, `fecha_hora`) se ignoran.
+- `FechaHora` la pone la base de datos al insertar.
+- Datos del usuario: salen de `EXPO_PUBLIC_USUARIO`, `EXPO_PUBLIC_NOMBRE`, `EXPO_PUBLIC_PATERNO` y `EXPO_PUBLIC_MATERNO` en `client/.env`.
 
-Respuesta: `201 { "ok": true, "servidor": "windows" | "linux", "id": 1 }`
+Respuestas:
 
-`GET /api/clima` devuelve los registros guardados en ese servidor.
+| Código | Cuándo | Cuerpo |
+|---|---|---|
+| `201` | Registro guardado | `{ "ok": true, "servidor": "windows" \| "linux", "id": 1, "fechaHora": "…" }` |
+| `400` | Datos inválidos | `{ "ok": false, "error": "Datos inválidos.", "errores": ["…"] }` |
+| `401` | API key incorrecta | `{ "ok": false, "error": "API key inválida." }` |
+| `503` | La BD no responde | `{ "ok": false, "error": "La base de datos no está disponible." }` |
+
+`GET /api/clima?limite=50` (header `x-api-key`) devuelve los últimos registros de ese servidor.
+
+`GET /api/salud` (sin API key) indica si el servicio y su base de datos responden.
 
 ## Comandos de voz
 
@@ -214,16 +296,17 @@ El cliente normaliza el texto (minúsculas, sin acentos), exige la palabra "guar
 
 Las dos VMs están en computadoras distintas y el celular debe alcanzar ambas.
 
-- **Desarrollo:** Tailscale en las dos VMs y en el celular, para tener IPs fijas desde cualquier red.
-- **Grabación del video:** misma red WiFi, con las VMs en adaptador puente (bridged).
-- Abrir el puerto `3000` en Windows Firewall y en `ufw`.
+- Red virtual **ZeroTier** `3b19b3a7160c920d` (`10.191.84.0/24`): las dos VMs, la computadora cliente y el **celular** deben estar unidos y autorizados en ZeroTier Central. En Android se usa la app *ZeroTier One*.
+- El puerto `3000` se abre en Windows Firewall y en `ufw` solo para `10.191.84.0/24`.
 - Android bloquea HTTP sin cifrar; ya está habilitado en `client/app.json` con `usesCleartextTraffic`.
 
 ## Seguridad
 
 - API key en el header `x-api-key`; las peticiones sin ella se rechazan con `401`.
 - Validación de datos en el servidor y consultas parametrizadas.
-- Usuario de BD con permisos mínimos (`INSERT` y `SELECT` sobre la tabla), nunca `sa` ni `postgres`.
+- Usuario de BD `upp_api` con permisos mínimos (`INSERT` y `SELECT` sobre la tabla), nunca `sa` ni `postgres`. Si alguien roba la API key puede insertar registros, pero no borrar ni modificar.
+- Las peticiones con datos inválidos se rechazan con `400` antes de llegar a la BD.
+- En Ubuntu, el servicio corre con un usuario de sistema sin shell y con el endurecimiento de systemd (`NoNewPrivileges`, `ProtectSystem`).
 - La BD escucha solo en `localhost`; hacia la red se expone únicamente el servicio web.
 - Credenciales y API key en `.env`, que no se sube al repo.
 - Limitación conocida: las variables `EXPO_PUBLIC_*` quedan dentro de la app, así que la API key del cliente se puede extraer del APK.

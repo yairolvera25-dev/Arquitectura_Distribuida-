@@ -1,0 +1,25 @@
+# Servicio de systemd para que la API arranque sola con el servidor.
+# Instalación: ver la sección "Servidor dos" del README principal.
+[Unit]
+Description=API de clima UPP (servidor dos, PostgreSQL)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=clima-api
+Group=clima-api
+WorkingDirectory=/opt/clima-api
+ExecStart=/usr/bin/node src/index.js
+Restart=on-failure
+RestartSec=3
+Environment=NODE_ENV=production
+
+# Endurecimiento: el proceso no puede escalar privilegios ni escribir en el sistema.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

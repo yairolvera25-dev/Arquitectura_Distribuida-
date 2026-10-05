@@ -5,7 +5,7 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "ios": {
       "supportsTablet": true
     },
@@ -20,7 +20,12 @@
       "package": "mx.edu.upp.climadistribuido"
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "name": "Clima Distribuido",
+      "shortName": "Clima",
+      "lang": "es-MX",
+      "themeColor": "#0A0D12",
+      "backgroundColor": "#0A0D12"
     },
     "plugins": [
       [
@@ -44,6 +49,7 @@
           }
         }
       ]
-    ]
+    ],
+    "backgroundColor": "#0A0D12"
   }
 }

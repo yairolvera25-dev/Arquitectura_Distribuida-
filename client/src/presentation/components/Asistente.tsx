@@ -36,18 +36,19 @@ export const microfonoApagado = (estado: EstadoVoz) => estado === 'apagado' || e
 
 type PanelProps = {
   estado: EstadoVoz;
+  hablando?: boolean;
   transcripcion: string;
   mensaje: string;
   onAlternar: () => void;
   style?: StyleProp<ViewStyle>;
 };
 
-export function PanelAsistente({ estado, transcripcion, mensaje, onAlternar, style }: PanelProps) {
-  const texto = TEXTO_ESTADO[estado];
+export function PanelAsistente({ estado, hablando = false, transcripcion, mensaje, onAlternar, style }: PanelProps) {
+  const texto = hablando ? { titulo: 'Barbie está hablando…', ayuda: 'Te cuento lo que hice' } : TEXTO_ESTADO[estado];
   return (
     <Tarjeta titulo="Asistente Barbie" accion={<ChipEstado estado={estado} />} style={style}>
       <View style={styles.panel}>
-        <OrbeVoz estado={estado} onPress={onAlternar} />
+        <OrbeVoz estado={estado} hablando={hablando} onPress={onAlternar} />
         <View style={styles.panelTexto}>
           <Text style={styles.estado}>{texto.titulo}</Text>
           <Text style={estilosTarjeta.etiqueta}>{texto.ayuda}</Text>

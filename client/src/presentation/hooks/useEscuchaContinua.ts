@@ -52,6 +52,7 @@ export function useEscuchaContinua({ onGuardar, onPreguntar }: Opciones) {
   const [estado, setEstado] = useState<EstadoVoz>('apagado');
   const [transcripcion, setTranscripcion] = useState('');
   const [mensaje, setMensaje] = useState('');
+  const [hablando, setHablando] = useState(false); // Barbie está diciendo algo en voz alta
 
   const habilitado = useRef(false); // El usuario quiere que se escuche
   const pausado = useRef(false); // Pausa temporal mientras la app habla/guarda
@@ -110,6 +111,7 @@ export function useEscuchaContinua({ onGuardar, onPreguntar }: Opciones) {
     (texto: string, { reanudar = true } = {}) =>
       new Promise<void>((resolve) => {
         setMensaje(texto);
+        setHablando(true);
         pausado.current = true;
         ExpoSpeechRecognitionModule.abort();
         let terminado = false;
@@ -117,6 +119,7 @@ export function useEscuchaContinua({ onGuardar, onPreguntar }: Opciones) {
           if (terminado) return;
           terminado = true;
           clearTimeout(respaldo);
+          setHablando(false);
           if (reanudar) {
             pausado.current = false;
             iniciarReconocedor();
@@ -328,6 +331,7 @@ export function useEscuchaContinua({ onGuardar, onPreguntar }: Opciones) {
 
   return {
     estado,
+    hablando,
     transcripcion,
     mensaje,
     alternar: estado === 'sinSoporte' ? () => {} : estado === 'apagado' ? encender : apagar,

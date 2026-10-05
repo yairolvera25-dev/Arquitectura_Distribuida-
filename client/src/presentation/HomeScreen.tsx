@@ -14,10 +14,12 @@ import { consultarRegistros, guardarClima, type DatoClima } from '../data/servic
 import { ChipEstado, DETALLE_SERVIDOR, ListaServidores, PanelAsistente, type EstadoServidor } from './components/Asistente';
 import { BarraLateral, Logo } from './components/BarraLateral';
 import { Destacados, PronosticoSemana, TarjetaActual } from './components/Clima';
+import { Aparecer } from './components/animaciones';
+import { cieloDe, esDeNoche, FondoAnimado, PrimerPlanoClima } from './components/FondoAnimado';
 import { PanelRegistro } from './components/Registro';
 import { useEscuchaContinua } from './hooks/useEscuchaContinua';
 import { useSesion } from './hooks/useSesion';
-import { colores, espacio, radio } from './theme';
+import { colores, espacio, radio, vidrio } from './theme';
 
 const ANCHO_ESCRITORIO = 1024;
 const ANCHO_COLUMNA_IZQUIERDA = 320;
@@ -106,6 +108,7 @@ export default function HomeScreen() {
   const asistente = (
     <PanelAsistente
       estado={voz.estado}
+      hablando={voz.hablando}
       transcripcion={voz.transcripcion}
       mensaje={voz.mensaje || errorClima}
       onAlternar={voz.alternar}
@@ -124,14 +127,18 @@ export default function HomeScreen() {
       pronostico={pronostico}
       cargando={cargando}
       onActualizar={cargarClima}
-      style={escritorio && styles.columnaIzquierda}
+      style={styles.llenar}
     />
   );
+  const cielo = cieloDe(pronostico?.codigoActual);
+  const fondo = <FondoAnimado cielo={cielo} noche={esDeNoche(pronostico)} />;
+  const primerPlano = <PrimerPlanoClima cielo={cielo} />;
 
   if (escritorio) {
     return (
       <View style={styles.fondo}>
         <StatusBar style="light" />
+        {fondo}
         <View style={styles.marco}>
           <BarraLateral
             estadoVoz={voz.estado}
@@ -144,26 +151,35 @@ export default function HomeScreen() {
           />
           <ScrollView style={styles.flex} contentContainerStyle={styles.principal}>
             <View style={styles.fila}>
-              {actual}
-              <Destacados clima={clima} pronostico={pronostico} style={styles.flex} />
+              <Aparecer style={styles.columnaIzquierda}>{actual}</Aparecer>
+              <Aparecer retraso={120} style={styles.flex}>
+                <Destacados clima={clima} pronostico={pronostico} style={styles.llenar} />
+              </Aparecer>
             </View>
             <View style={styles.fila}>
-              <PronosticoSemana pronostico={pronostico} style={styles.columnaIzquierda} />
+              <Aparecer retraso={240} style={styles.columnaIzquierda}>
+                <PronosticoSemana pronostico={pronostico} style={styles.llenar} />
+              </Aparecer>
               <View style={[styles.flex, styles.columna]}>
-                {asistente}
-                {listaServidores}
-                <PanelRegistro />
+                <Aparecer retraso={320}>{asistente}</Aparecer>
+                <Aparecer retraso={420}>{listaServidores}</Aparecer>
+                <Aparecer retraso={520}>
+                  <PanelRegistro />
+                </Aparecer>
               </View>
             </View>
           </ScrollView>
         </View>
+        {primerPlano}
       </View>
     );
   }
 
   return (
-    <ScrollView style={styles.fondoMovil} contentContainerStyle={styles.movil}>
+    <View style={styles.fondoMovil}>
       <StatusBar style="light" />
+      {fondo}
+      <ScrollView style={styles.flex} contentContainerStyle={styles.movil}>
       <View style={styles.encabezadoMovil}>
         <Logo horizontal />
         <View style={styles.encabezadoDerecha}>
@@ -174,19 +190,30 @@ export default function HomeScreen() {
           </Pressable>
         </View>
       </View>
-      {actual}
-      {asistente}
-      {listaServidores}
-      <PanelRegistro />
-      <Destacados clima={clima} pronostico={pronostico} />
-      <PronosticoSemana pronostico={pronostico} />
-    </ScrollView>
+      <Aparecer>{actual}</Aparecer>
+      <Aparecer retraso={100}>{asistente}</Aparecer>
+      <Aparecer retraso={200}>{listaServidores}</Aparecer>
+      <Aparecer retraso={300}>
+        <Destacados clima={clima} pronostico={pronostico} />
+      </Aparecer>
+      <Aparecer retraso={400}>
+        <PanelRegistro />
+      </Aparecer>
+      <Aparecer retraso={500}>
+        <PronosticoSemana pronostico={pronostico} />
+      </Aparecer>
+      </ScrollView>
+      {primerPlano}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   flex: {
     flex: 1,
+  },
+  llenar: {
+    flexGrow: 1,
   },
   fondo: {
     flex: 1,
@@ -197,10 +224,9 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
     gap: espacio.md,
+    ...vidrio,
     backgroundColor: colores.marco,
     borderRadius: radio.xl,
-    borderWidth: 1,
-    borderColor: colores.borde,
     padding: espacio.md,
   },
   principal: {

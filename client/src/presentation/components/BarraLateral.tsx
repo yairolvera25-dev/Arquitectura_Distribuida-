@@ -1,9 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { ServidorId } from '../../config';
 import type { EstadoVoz } from '../hooks/useEscuchaContinua';
-import { colores, espacio, radio } from '../theme';
+import { colores, espacio, radio, vidrio } from '../theme';
+import { useBucle } from './animaciones';
 import { DETALLE_SERVIDOR, microfonoApagado, type EstadoServidor } from './Asistente';
 
 type Props = {
@@ -68,9 +69,27 @@ export function BarraLateral({
 export function Logo({ horizontal }: { horizontal?: boolean }) {
   return (
     <View style={[styles.logo, horizontal && styles.logoHorizontal]}>
-      <Ionicons name="sparkles" size={22} color={colores.primario} />
+      <Destello />
       <Text style={styles.logoTexto}>Barbie</Text>
     </View>
+  );
+}
+
+/** Logo de Barbie: los destellos giran y brillan en reposo. */
+function Destello() {
+  const t = useBucle(2200, { vaiven: true });
+  return (
+    <Animated.View
+      style={{
+        opacity: t.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1] }),
+        transform: [
+          { scale: t.interpolate({ inputRange: [0, 1], outputRange: [0.9, 1.15] }) },
+          { rotate: t.interpolate({ inputRange: [0, 1], outputRange: ['-10deg', '10deg'] }) },
+        ],
+      }}
+    >
+      <Ionicons name="sparkles" size={22} color={colores.primario} />
+    </Animated.View>
   );
 }
 
@@ -99,10 +118,8 @@ const styles = StyleSheet.create({
   barra: {
     width: 76,
     alignItems: 'center',
-    backgroundColor: colores.tarjeta,
+    ...vidrio,
     borderRadius: radio.lg,
-    borderWidth: 1,
-    borderColor: colores.borde,
     paddingVertical: espacio.lg,
     gap: espacio.xl,
   },

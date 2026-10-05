@@ -15,8 +15,10 @@ import {
 } from 'react-native';
 
 import { iniciarSesion, registrar } from '../data/services/autenticacion';
+import { Aparecer } from './components/animaciones';
 import { Logo } from './components/BarraLateral';
-import { colores, espacio, radio } from './theme';
+import { FondoAnimado } from './components/FondoAnimado';
+import { colores, espacio, radio, vidrio } from './theme';
 
 type Modo = 'entrar' | 'registro';
 
@@ -85,7 +87,9 @@ export default function PantallaAcceso() {
   return (
     <KeyboardAvoidingView style={styles.pantalla} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <StatusBar style="light" />
+      <FondoAnimado cielo="despejado" noche />
       <ScrollView contentContainerStyle={styles.contenido} keyboardShouldPersistTaps="handled">
+        <Aparecer>
         <View style={styles.tarjeta}>
           <View style={styles.encabezado}>
             <Logo horizontal />
@@ -183,6 +187,7 @@ export default function PantallaAcceso() {
             <Text style={styles.pieTexto}>Tu contraseña se guarda cifrada en el servidor uno y en el servidor dos.</Text>
           </View>
         </View>
+        </Aparecer>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -230,10 +235,8 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 420,
     alignSelf: 'center',
-    backgroundColor: colores.tarjeta,
+    ...vidrio,
     borderRadius: radio.xl,
-    borderWidth: 1,
-    borderColor: colores.borde,
     padding: espacio.lg,
     gap: espacio.md,
   },
@@ -255,7 +258,7 @@ const styles = StyleSheet.create({
   },
   pestanas: {
     flexDirection: 'row',
-    backgroundColor: colores.fondo,
+    backgroundColor: 'rgba(0,0,0,0.25)',
     borderRadius: radio.sm,
     padding: 4,
   },

@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
-import { colores, espacio, radio } from '../theme';
+import { colores, espacio, radio, vidrio } from '../theme';
 
 type Props = {
   titulo?: string;
@@ -48,10 +48,8 @@ export const estilosTarjeta = StyleSheet.create({
 
 const styles = StyleSheet.create({
   tarjeta: {
-    backgroundColor: colores.tarjeta,
+    ...vidrio,
     borderRadius: radio.lg,
-    borderWidth: 1,
-    borderColor: colores.borde,
     padding: espacio.md,
     gap: espacio.md,
   },

@@ -1,9 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { ActivityIndicator, Animated, Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
 import type { RegistroClima } from '../../data/services/clima';
 import { iconoClima, type Pronostico } from '../../data/services/pronostico';
 import { colores, espacio, radio } from '../theme';
+import { Aparecer, Flotar, useBucle, useContador, useProgreso } from './animaciones';
 import { estilosTarjeta, Tarjeta } from './Tarjeta';
 
 const horaDeIso = (iso: string) => iso.slice(11, 16); // "2026-10-04T06:26" → "06:26"
@@ -27,7 +28,9 @@ export function TarjetaActual({ clima, pronostico, cargando, onActualizar, style
   return (
     <Tarjeta style={[styles.actual, style]}>
       <View style={styles.actualArriba}>
-        <Text style={styles.iconoGrande}>{iconoClima(pronostico?.codigoActual)}</Text>
+        <Flotar altura={8}>
+          <Text style={styles.iconoGrande}>{iconoClima(pronostico?.codigoActual)}</Text>
+        </Flotar>
         <Pressable
           onPress={onActualizar}
           disabled={cargando}
@@ -44,10 +47,7 @@ export function TarjetaActual({ clima, pronostico, cargando, onActualizar, style
 
       {clima ? (
         <>
-          <Text style={styles.temperatura}>
-            {Math.round(clima.temperatura)}
-            <Text style={styles.grados}>°C</Text>
-          </Text>
+          <Temperatura valor={clima.temperatura} />
           <View style={styles.renglon}>
             <Ionicons name="cloud-outline" size={16} color={colores.textoSecundario} />
             <Text style={styles.condicion}>{clima.condicion}</Text>
@@ -87,7 +87,7 @@ export function Destacados({ clima, pronostico: p, style }: DestacadosProps) {
         <View style={[estilosTarjeta.interna, styles.grande]}>
           <Text style={estilosTarjeta.etiqueta}>Viento</Text>
           <BarrasViento valores={p?.vientoPorHora ?? []} />
-          <Valor valor={p ? p.viento.toFixed(1) : '—'} unidad="km/h" />
+          <ValorAnimado numero={p?.viento} decimales={1} unidad="km/h" />
         </View>
 
         <View style={[estilosTarjeta.interna, styles.grande]}>
@@ -100,7 +100,7 @@ export function Destacados({ clima, pronostico: p, style }: DestacadosProps) {
               <Text style={estilosTarjeta.nota}>11+</Text>
             </View>
           </View>
-          <Valor valor={p ? p.uv.toFixed(1) : '—'} unidad="uv" />
+          <ValorAnimado numero={p?.uv} decimales={1} unidad="uv" />
         </View>
 
         <View style={[estilosTarjeta.interna, styles.grande]}>
@@ -116,18 +116,9 @@ export function Destacados({ clima, pronostico: p, style }: DestacadosProps) {
       </View>
 
       <View style={styles.cuadricula}>
-        <Pequena etiqueta="Humedad" valor={clima ? `${clima.humedad}` : '—'} unidad="%" icono="water-outline" />
-        <Pequena
-          etiqueta="Visibilidad"
-          valor={p ? p.visibilidadKm.toFixed(1) : '—'}
-          unidad="km"
-          icono="eye-outline"
-        />
-        <Pequena
-          etiqueta="Sensación"
-          valor={p ? `${Math.round(p.sensacion)}°` : '—'}
-          icono="thermometer-outline"
-        />
+        <Pequena etiqueta="Humedad" numero={clima?.humedad} unidad="%" icono="water-outline" />
+        <Pequena etiqueta="Visibilidad" numero={p?.visibilidadKm} decimales={1} unidad="km" icono="eye-outline" />
+        <Pequena etiqueta="Sensación" numero={p?.sensacion} unidad="°" icono="thermometer-outline" />
       </View>
     </Tarjeta>
   );
@@ -139,36 +130,77 @@ function progresoDelDia(amanecer: string, atardecer: string) {
   return Math.min(1, Math.max(0, (Date.now() - inicio) / (fin - inicio)));
 }
 
+function Temperatura({ valor }: { valor: number }) {
+  const texto = useContador(Math.round(valor), 1400);
+  return (
+    <Text style={styles.temperatura}>
+      {texto}
+      <Text style={styles.grados}>°C</Text>
+    </Text>
+  );
+}
+
 function BarrasViento({ valores }: { valores: number[] }) {
   const maximo = Math.max(1, ...valores);
   return (
     <View style={styles.barras}>
       {valores.map((valor, i) => (
-        <View
-          key={i}
-          style={[
-            styles.barraViento,
-            { height: 6 + (valor / maximo) * 34, backgroundColor: i === 0 ? colores.primario : colores.textoTenue },
-          ]}
-        />
+        <BarraViento key={i} alto={6 + (valor / maximo) * 34} actual={i === 0} retraso={i * 70} />
       ))}
     </View>
   );
 }
 
+/** Barra que crece desde abajo al aparecer; la de la hora actual además late. */
+function BarraViento({ alto, actual, retraso }: { alto: number; actual: boolean; retraso: number }) {
+  const crece = useProgreso(1, retraso, 700);
+  const late = useBucle(1400, { vaiven: true, activo: actual });
+  // Alto (animación de diseño) y opacidad (animación nativa) van en capas distintas.
+  return (
+    <Animated.View style={[styles.barraViento, { height: crece.interpolate({ inputRange: [0, 1], outputRange: [0, alto] }) }]}>
+      <Animated.View
+        style={[
+          styles.barraRelleno,
+          {
+            backgroundColor: actual ? colores.primario : 'rgba(255,255,255,0.18)',
+            opacity: actual ? late.interpolate({ inputRange: [0, 1], outputRange: [0.75, 1] }) : 1,
+          },
+        ]}
+      />
+    </Animated.View>
+  );
+}
+
 function Barra({ progreso, color, punto }: { progreso: number; color: string; punto?: boolean }) {
+  const ancho = useProgreso(progreso, 300, 1400);
+  const brillo = useBucle(1800, { vaiven: true, activo: Boolean(punto) });
+  const porcentaje = ancho.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] });
   return (
     <View style={styles.pista}>
-      <View style={[styles.progreso, { width: `${progreso * 100}%`, backgroundColor: color }]} />
-      {punto ? <View style={[styles.punto, { left: `${progreso * 100}%`, backgroundColor: color }]} /> : null}
+      <Animated.View style={[styles.progreso, { width: porcentaje, backgroundColor: color }]} />
+      {punto ? (
+        <Animated.View style={[styles.puntoPosicion, { left: porcentaje }]}>
+          <Animated.View
+            style={[
+              styles.punto,
+              {
+                backgroundColor: color,
+                boxShadow: `0 0 12px ${color}`,
+                transform: [{ scale: brillo.interpolate({ inputRange: [0, 1], outputRange: [1, 1.35] }) }],
+              },
+            ]}
+          />
+        </Animated.View>
+      ) : null}
     </View>
   );
 }
 
-function Valor({ valor, unidad }: { valor: string; unidad?: string }) {
+function ValorAnimado({ numero, decimales = 0, unidad }: { numero: number | null | undefined; decimales?: number; unidad?: string }) {
+  const texto = useContador(numero, 1200, decimales);
   return (
     <Text style={styles.valor}>
-      {valor}
+      {texto}
       {unidad ? <Text style={styles.unidad}> {unidad}</Text> : null}
     </Text>
   );
@@ -188,19 +220,22 @@ function Sol({ icono, etiqueta, hora }: { icono: 'sunny-outline' | 'moon-outline
 
 type PequenaProps = {
   etiqueta: string;
-  valor: string;
+  numero: number | null | undefined;
+  decimales?: number;
   unidad?: string;
   icono: keyof typeof Ionicons.glyphMap;
 };
 
-function Pequena({ etiqueta, valor, unidad, icono }: PequenaProps) {
+function Pequena({ etiqueta, numero, decimales, unidad, icono }: PequenaProps) {
   return (
     <View style={[estilosTarjeta.interna, styles.pequena]}>
       <View>
         <Text style={estilosTarjeta.etiqueta}>{etiqueta}</Text>
-        <Valor valor={valor} unidad={unidad} />
+        <ValorAnimado numero={numero} decimales={decimales} unidad={unidad} />
       </View>
-      <Ionicons name={icono} size={22} color={colores.primario} />
+      <Flotar altura={4} duracion={3000}>
+        <Ionicons name={icono} size={22} color={colores.primario} />
+      </Flotar>
     </View>
   );
 }
@@ -214,8 +249,10 @@ export function PronosticoSemana({ pronostico, style }: { pronostico: Pronostico
         pronostico.dias.map((dia, i) => {
           const fecha = new Date(`${dia.fecha}T12:00:00`);
           return (
-            <View key={dia.fecha} style={styles.dia}>
-              <Text style={styles.diaIcono}>{iconoClima(dia.codigo)}</Text>
+            <Aparecer key={dia.fecha} retraso={250 + i * 90} style={styles.dia}>
+              <Flotar altura={3} duracion={2400 + i * 200}>
+                <Text style={styles.diaIcono}>{iconoClima(dia.codigo)}</Text>
+              </Flotar>
               <Text style={styles.diaTemp}>
                 {Math.round(dia.maxima)}°<Text style={styles.diaMin}>/{Math.round(dia.minima)}°</Text>
               </Text>
@@ -225,7 +262,7 @@ export function PronosticoSemana({ pronostico, style }: { pronostico: Pronostico
               <Text style={styles.diaNombre}>
                 {i === 0 ? 'Hoy' : mayuscula(fecha.toLocaleDateString('es-MX', { weekday: 'long' }))}
               </Text>
-            </View>
+            </Aparecer>
           );
         })
       ) : (
@@ -320,6 +357,17 @@ const styles = StyleSheet.create({
   barraViento: {
     flex: 1,
     borderRadius: 2,
+    overflow: 'hidden',
+  },
+  barraRelleno: {
+    flex: 1,
+  },
+  puntoPosicion: {
+    position: 'absolute',
+    width: 0,
+    height: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   pista: {
     height: 6,
@@ -332,11 +380,9 @@ const styles = StyleSheet.create({
     borderRadius: 3,
   },
   punto: {
-    position: 'absolute',
     width: 12,
     height: 12,
     borderRadius: 6,
-    marginLeft: -6,
     borderWidth: 2,
     borderColor: colores.tarjetaAlta,
   },

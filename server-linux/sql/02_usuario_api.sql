@@ -4,8 +4,20 @@
 --
 -- Ejecutar en el servidor Ubuntu:
 --   sudo -u postgres psql -d UPP -f sql/02_usuario_api.sql
--- y después asignar la contraseña (no queda guardada en ningún archivo):
---   sudo -u postgres psql -c "\password upp_api"
+--
+-- El rol se crea SIN contraseña, así que todavía no puede conectarse.
+-- Hay que asignársela aparte, abriendo psql y usando \password, que la pide
+-- por teclado y no la deja en el historial del shell:
+--   sudo -u postgres psql -d UPP
+--   \password upp_api
+--   \q
+--
+-- No uses  psql -c "\password upp_api" : con -c el comando no es interactivo
+-- y no llega a pedir nada. Si prefieres una sola línea, usa ALTER ROLE
+-- (queda en el historial de bash, bórralo después):
+--   sudo -u postgres psql -d UPP -c "ALTER ROLE upp_api WITH PASSWORD 'la-que-elegiste'"
+--
+-- Esa misma contraseña va en DB_PASSWORD del .env, ENTRE COMILLAS DOBLES.
 
 DO $$
 BEGIN

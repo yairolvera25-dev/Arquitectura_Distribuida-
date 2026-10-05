@@ -183,37 +183,61 @@ La **API key** debe ser la misma en `client/.env` (`EXPO_PUBLIC_API_KEY`) y en e
 
 ### Servidor dos — Ubuntu Server (`server-linux/`)
 
-Por SSH en la VM Ubuntu:
+Por SSH en la VM Ubuntu. El instalador hace todos los pasos y se puede repetir
+sin romper nada: respeta el `.env` que ya exista y vuelve a dejar el servicio
+arrancado.
 
 ```bash
-# 1. Node.js 22 LTS
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-sudo apt install -y nodejs git
-
-# 2. Código en /opt/clima-api, con un usuario del sistema sin shell
-sudo useradd --system --home /opt/clima-api --shell /usr/sbin/nologin clima-api
-sudo git clone <url-del-repo> /tmp/repo
-sudo cp -r /tmp/repo/server-linux /opt/clima-api
-cd /opt/clima-api && sudo npm ci --omit=dev
-
-# 3. Usuario de BD con permisos mínimos (la tabla UPP.Georreferencia ya existe)
-sudo -u postgres psql -d UPP -f sql/02_usuario_api.sql
-sudo -u postgres psql -c "\password upp_api"
-
-# 4. Configuración (pon la API key y la contraseña de upp_api)
-sudo cp .env.example .env && sudo nano .env
-sudo chown -R root:clima-api /opt/clima-api && sudo chmod 640 .env
-
-# 5. Firewall: puerto 3000 solo desde la red del equipo
-sudo ufw allow from 10.191.84.0/24 to any port 3000 proto tcp
-
-# 6. Servicio que arranca solo con el servidor
-sudo cp deploy/clima-api.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now clima-api
-systemctl status clima-api        # debe decir active (running)
-journalctl -u clima-api -f        # ver los registros que llegan
+sudo apt install -y git
+git clone <url-del-repo> ~/repo
+cd ~/repo/server-linux
+sudo bash deploy/instalar.sh
 ```
+
+Pide dos cosas por teclado y nada más:
+
+- La **API key**, que tiene que ser la misma de `EXPO_PUBLIC_API_KEY` en `client/.env`.
+- Una **contraseña nueva para `upp_api`**, el usuario de PostgreSQL del servicio.
+
+Al terminar imprime la respuesta de `/api/salud`. Si dice
+`"baseDeDatos":"conectada"`, ya quedó. Para rehacer la configuración desde cero:
+`sudo bash deploy/instalar.sh --reconfigurar`.
+
+<details>
+<summary>Qué hace, paso por paso (por si hay que hacerlo a mano)</summary>
+
+1. **Zona horaria.** Si la VM está en UTC la pasa a `America/Mexico_City`.
+   `FechaHora` se llena con `CURRENT_TIMESTAMP`, o sea el reloj del servidor, así
+   que en UTC los registros se guardan 6 horas adelantados.
+2. **Node.js 22** desde NodeSource (el `nodejs` de Ubuntu 24.04 es la versión 18).
+3. **Usuario `clima-api`**, de sistema, sin shell y sin contraseña.
+4. **Código a `/opt/clima-api`** y `npm ci --omit=dev`.
+5. **Rol `upp_api`** con `sql/02_usuario_api.sql` (solo `SELECT` e `INSERT` sobre
+   `Georreferencia`) y le asigna la contraseña con `ALTER ROLE`.
+   No uses `psql -c "\password upp_api"`: con `-c` el comando no es interactivo y
+   nunca llega a pedir la contraseña. A mano es `sudo -u postgres psql -d UPP` y
+   dentro `\password upp_api`.
+6. **`.env`** con la API key y la contraseña, en modo `640` y de `root:clima-api`.
+   **La contraseña va entre comillas dobles.** Sin comillas, `dotenv` corta el
+   valor en el primer `#` y la API intenta entrar con un trozo: falla con
+   `password authentication failed` aunque el archivo se vea perfecto.
+7. **Servicio `clima-api`** de systemd, habilitado para arrancar con la VM.
+8. **Regla de firewall** para el puerto 3000 desde `10.191.84.0/24`.
+
+</details>
+
+> **El firewall está desactivado.** `ufw` está instalado pero en `ENABLED=no`, así
+> que la regla del puerto 3000 se guarda pero no se aplica: ahora mismo el 3000 y
+> el 5432 están abiertos a cualquiera que alcance la VM. Si lo vas a activar, abre
+> **antes** el SSH o te quedas fuera del servidor, porque la política por omisión
+> es `DROP`:
+>
+> ```bash
+> sudo ufw allow 22/tcp                                  # SSH, primero que nada
+> sudo ufw allow 9993/udp                                # ZeroTier (si no, va por relay)
+> sudo ufw allow from 10.191.84.0/24 to any port 3000 proto tcp
+> sudo ufw enable
+> ```
 
 ### Servidor uno — Windows Server (`server-windows/`)
 
@@ -290,14 +314,28 @@ Respuestas:
 | "Guardar en servidor uno" / "Guardar en Windows" | `server-windows` |
 | "Guardar en servidor dos" / "Guardar en Linux" | `server-linux` |
 
-El cliente normaliza el texto (minúsculas, sin acentos), exige la palabra "guardar" y busca `uno`, `1` o `windows` para el Servidor 1, y `dos`, `2` o `linux` para el Servidor 2. Si no coincide, o si se mencionan los dos servidores, pide repetir el comando.
+El cliente normaliza el texto (minúsculas, sin acentos) y **exige la palabra clave "Barbie"**, no la palabra "guardar". El reconocedor la transcribe de varias formas, así que también valen `barbi`, `barby`, `barbe`, `varbie`, `varbi`, `bar bie` y `bar bi`.
+
+Solo se mira lo que se dijo **después** de la palabra clave, y ahí busca `uno`, `1` o `windows` para el Servidor 1, y `dos`, `2` o `linux` para el Servidor 2.
+
+| Lo que se dice | Resultado |
+|---|---|
+| "Barbie guardar en servidor uno" | guarda en `windows` |
+| "Barbie servidor dos" | guarda en `linux` |
+| "barbi guárdame esto en linux" | guarda en `linux` (la palabra "guardar" no hace falta) |
+| "guardar en servidor uno" | **ignorado**: falta la palabra clave |
+| "Barbie" | queda activado, esperando el servidor |
+
+Si ya se dijo "Barbie" en una frase anterior (`yaActivado`), basta con decir el servidor: "servidor uno" o "en linux".
+
+Si se mencionan los dos servidores en la misma frase, **no pide repetir**: se queda con el primero que encuentra, que es el Servidor 1.
 
 ## Red
 
 Las dos VMs están en computadoras distintas y el celular debe alcanzar ambas.
 
 - Red virtual **ZeroTier** `3b19b3a7160c920d` (`10.191.84.0/24`): las dos VMs, la computadora cliente y el **celular** deben estar unidos y autorizados en ZeroTier Central. En Android se usa la app *ZeroTier One*.
-- El puerto `3000` se abre en Windows Firewall y en `ufw` solo para `10.191.84.0/24`.
+- El puerto `3000` se abre en Windows Firewall solo para `10.191.84.0/24`. En Ubuntu la regla de `ufw` está creada **pero `ufw` está desactivado**, así que todavía no se aplica (ver la advertencia en la sección del Servidor dos).
 - Android bloquea HTTP sin cifrar; ya está habilitado en `client/app.json` con `usesCleartextTraffic`.
 
 ## Seguridad
@@ -307,7 +345,7 @@ Las dos VMs están en computadoras distintas y el celular debe alcanzar ambas.
 - Usuario de BD `upp_api` con permisos mínimos (`INSERT` y `SELECT` sobre la tabla), nunca `sa` ni `postgres`. Si alguien roba la API key puede insertar registros, pero no borrar ni modificar.
 - Las peticiones con datos inválidos se rechazan con `400` antes de llegar a la BD.
 - En Ubuntu, el servicio corre con un usuario de sistema sin shell y con el endurecimiento de systemd (`NoNewPrivileges`, `ProtectSystem`).
-- La BD escucha solo en `localhost`; hacia la red se expone únicamente el servicio web.
+- **Pendiente:** hoy las dos bases de datos **sí** están expuestas a la red ZeroTier. Comprobado: PostgreSQL escucha en `0.0.0.0:5432` con `ufw` desactivado, y el `1433` de SQL Server acepta conexiones desde la red del equipo (regla heredada de la Actividad 2). Las dos deben quedar solo para `localhost` o para la red interna de cada VM antes de entregar.
 - Credenciales y API key en `.env`, que no se sube al repo.
 - Limitación conocida: las variables `EXPO_PUBLIC_*` quedan dentro de la app, así que la API key del cliente se puede extraer del APK.
 

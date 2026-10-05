@@ -1,6 +1,13 @@
--- Base UPP y tabla Georreferencia (igual que en la Actividad 2).
--- Ya existe en el servidor; este script solo sirve para recrearla desde cero.
+-- Base UPP y tabla Georreferencia. Ya existe en el servidor desde la
+-- Actividad 2; este script solo sirve para recrearla desde cero.
 -- Ejecutar: sudo -u postgres psql -f sql/01_tabla.sql
+--
+-- Nota: los anchos de aquí (50) son los del contrato, iguales a los del
+-- servidor Windows y a los que valida la API. La tabla que ya está instalada
+-- en la VM se creó con VARCHAR(80) en Nombre, Paterno, Materno y Estado, y
+-- con Nombre aceptando nulos. Es compatible -- la API nunca deja pasar más de
+-- 50 caracteres ni un Nombre vacío -- pero por eso un CREATE desde cero no
+-- sale idéntico a la tabla en producción. No hace falta migrar nada.
 
 SELECT 'CREATE DATABASE "UPP" OWNER upp_admin'
 WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'UPP')\gexec

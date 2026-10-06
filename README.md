@@ -6,10 +6,13 @@ Examen Parcial 1 de Seguridad Informática (Universidad Politécnica de Pachuca)
 
 | Componente | Estado |
 |---|---|
-| `client/` | Código base listo; falta probarlo en un teléfono |
-| `server-windows/` | Código listo; falta instalarlo en la VM Windows |
-| `server-linux/` | Código listo y probado con PostgreSQL; falta instalarlo en la VM Ubuntu |
-| `docs/` | Pendiente |
+| `client/` | Código listo; ya guarda registros reales en el servidor dos |
+| `server-windows/` | Instalado en `10.191.84.109:3000`, pero **le falta el inicio de sesión**: responde `404` en `/api/auth` (ver *Actualizar los servidores*) |
+| `server-linux/` | Instalado y al día en `10.191.84.219:3000`, con inicio de sesión y respaldo de bitácora |
+| `docs/` | `pasos-cliente.md` y `probar-servidores.sh` listos; falta el reporte PDF |
+
+Falta para entregar: el **vídeo**, el **reporte PDF** y cerrar las dos bases de
+datos, que hoy siguen expuestas a la red del equipo (ver **Seguridad**).
 
 ## Arquitectura
 

@@ -29,7 +29,12 @@ type Parte = {
 };
 type Contenido = { role: 'user' | 'model'; parts: Parte[] };
 
-export type ContextoBarbie = { clima: RegistroClima | null; pronostico: Pronostico | null };
+export type ContextoBarbie = {
+  clima: RegistroClima | null;
+  pronostico: Pronostico | null;
+  /** true si el dashboard muestra una ciudad elegida y no la ubicación real del GPS. */
+  ubicacionElegida?: boolean;
+};
 
 export type AccionesBarbie = {
   guardar: (
@@ -37,6 +42,8 @@ export type AccionesBarbie = {
     datos?: DatoClima[],
   ) => Promise<{ id: number; fechaHora: string; contenido: Partial<RegistroClima> }>;
   respaldarBitacora: (servidores: ServidorId[]) => Promise<ResultadoRespaldo[]>;
+  cambiarUbicacion: (lugar: string) => Promise<RegistroClima>;
+  volverAMiUbicacion: () => Promise<RegistroClima>;
   consultarBitacora: (servidor: ServidorId, limite: number) => Promise<{ total: number; eventos: EventoRespaldado[] }>;
   consultar: (servidor: ServidorId, filtros: FiltrosConsulta) => Promise<{ total: number | null; registros: RegistroGuardado[] }>;
 };
@@ -111,6 +118,28 @@ const HERRAMIENTAS = [
         },
       },
       {
+        name: 'cambiar_ubicacion',
+        description:
+          'Cambia el dashboard al clima de otra ciudad o lugar del mundo y devuelve su clima actual. Úsala ' +
+          'cuando pregunten por el clima de otro lugar ("¿cómo está el clima en Londres?") o pidan cambiar ' +
+          'la ubicación. Después de usarla, guardar_clima guarda el clima y la ubicación de ese lugar.',
+        parameters: {
+          type: 'object',
+          properties: {
+            lugar: {
+              type: 'string',
+              description: 'Nombre de la ciudad, con el país si hace falta para distinguirla (p. ej. "Londres", "París, Francia").',
+            },
+          },
+          required: ['lugar'],
+        },
+      },
+      {
+        name: 'usar_mi_ubicacion',
+        description: 'Regresa el dashboard a la ubicación real del usuario (su GPS) y devuelve su clima actual.',
+        parameters: { type: 'object', properties: {} },
+      },
+      {
         name: 'respaldar_bitacora',
         description:
           'Respalda la bitácora (los logs de la app: cada orden, cada paso y cada error) en la base de datos ' +
@@ -145,14 +174,18 @@ const fechaLocal = (fecha: string | Date) =>
 
 const horaDe = (iso: string) => iso.slice(11, 16); // "2026-10-05T07:12" -> "07:12"
 
-function describirClima({ clima, pronostico }: ContextoBarbie): string {
+function describirClima(contexto: ContextoBarbie): string {
+  const { clima, pronostico } = contexto;
   if (!clima) {
     return 'Todavía no tienes el clima actual: la app lo está obteniendo o no tiene permiso de ubicación.';
   }
   const lugar = [clima.municipio ?? clima.ciudad, clima.estado].filter(Boolean).join(', ');
   let texto =
-    `Ubicación actual de quien te habla: ${lugar}, México (latitud ${clima.latitud.toFixed(5)}, ` +
-    `longitud ${clima.longitud.toFixed(5)}). ` +
+    (contexto.ubicacionElegida
+      ? `El dashboard muestra una ubicación ELEGIDA por el usuario, no donde está: ${lugar} ` +
+        `(latitud ${clima.latitud.toFixed(5)}, longitud ${clima.longitud.toFixed(5)}). `
+      : `Ubicación actual de quien te habla: ${lugar}, México (latitud ${clima.latitud.toFixed(5)}, ` +
+        `longitud ${clima.longitud.toFixed(5)}). `) +
     `Clima actual en ${lugar}: ${clima.temperatura} °C, ${clima.condicion.toLowerCase()}, ` +
     `humedad ${clima.humedad} %, viento ${clima.viento} km/h.`;
   if (pronostico) {
@@ -187,6 +220,8 @@ function instrucciones(contexto: ContextoBarbie): string {
     'Para saber qué hay guardado, quién lo guardó, dónde o cuándo, usa consultar_registros con los filtros que hagan falta; nunca lo inventes. Resume en lugar de leer registro por registro: di cuántos son, quién los guardó, desde dónde, qué datos y cuándo. Un dato en null significa que en ese registro no se guardó. Si preguntan por los dos servidores, consulta cada uno.',
     'Cada registro se guarda a nombre de quien tiene la sesión iniciada; no puedes guardar a nombre de otra persona.',
     'Si preguntan dónde están, contesta con su ubicación actual (municipio y estado; las coordenadas solo si las piden).',
+    'Si preguntan por el clima de otra ciudad o país, usa cambiar_ubicacion (el dashboard pasa a mostrar ese lugar) y contesta con los datos que devuelve: condición, temperatura, humedad y viento. Para volver a donde está el usuario ("mi ubicación", "regresa", "aquí") usa usar_mi_ubicacion.',
+    'Guardar siempre guarda el clima y la ubicación que se está mostrando; si es una ciudad elegida, dilo al confirmar ("guardé el clima de Londres en el servidor uno").',
     'También puedes platicar de cualquier tema y contestar preguntas generales.',
     'El texto viene del reconocimiento de voz y puede traer errores: interprétalo con sentido común. Te activan diciendo tu nombre.',
     `Fecha y hora actual: ${fechaLocal(hoy)} (hoy es ${fechaIso}).`,
@@ -335,9 +370,32 @@ function describirContenido(contenido: Partial<RegistroClima>) {
   );
 }
 
+/** Resumen del clima de un lugar, para que Barbie lo cuente. */
+const resumenClima = (clima: RegistroClima) => ({
+  lugar: [clima.ciudad, clima.estado].filter(Boolean).join(', '),
+  temperatura: clima.temperatura,
+  condicion: clima.condicion,
+  humedad: clima.humedad,
+  viento: clima.viento,
+});
+
 /** Ejecuta una herramienta que pidió Gemini. Los errores se le devuelven a Gemini para que los explique. */
 async function ejecutar(llamada: LlamadaHerramienta, acciones: AccionesBarbie, hechos: string[]) {
   const args = llamada.args ?? {};
+
+  // Herramientas de ubicación: no van a ningún servidor.
+  if (llamada.name === 'cambiar_ubicacion' || llamada.name === 'usar_mi_ubicacion') {
+    try {
+      const clima =
+        llamada.name === 'cambiar_ubicacion'
+          ? await acciones.cambiarUbicacion(String(args.lugar ?? ''))
+          : await acciones.volverAMiUbicacion();
+      return { ok: true, mostrando: llamada.name === 'cambiar_ubicacion' ? 'ubicación elegida' : 'tu ubicación real', ...resumenClima(clima) };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : 'No se pudo cambiar la ubicación.' };
+    }
+  }
+
   const servidores = SERVIDORES_DE[String(args.servidor)];
   if (!servidores) {
     return { ok: false, error: 'Servidor desconocido; usa "uno", "dos" o "ambos".' };

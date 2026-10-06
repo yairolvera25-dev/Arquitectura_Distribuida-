@@ -1,8 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
-import { ActivityIndicator, Animated, Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { ActivityIndicator, Animated, Pressable, StyleSheet, Text, TextInput, View, type StyleProp, type ViewStyle } from 'react-native';
 
-import type { RegistroClima } from '../../data/services/clima';
+import type { LugarElegido, RegistroClima } from '../../data/services/clima';
 import { iconoClima, type Pronostico } from '../../data/services/pronostico';
 import { colores, espacio, radio } from '../theme';
 import { Aparecer, Flotar, useBucle, useContador, useProgreso } from './animaciones';
@@ -22,29 +22,87 @@ type ActualProps = {
   pronostico: Pronostico | null;
   cargando: boolean;
   onActualizar: () => void;
+  /** Ciudad elegida (null = ubicación real del GPS). */
+  lugarElegido: LugarElegido | null;
+  onBuscar: (nombre: string) => Promise<unknown>;
+  onVolver: () => Promise<unknown>;
   style?: StyleProp<ViewStyle>;
 };
 
-export function TarjetaActual({ clima, pronostico, cargando, onActualizar, style }: ActualProps) {
+export function TarjetaActual({
+  clima,
+  pronostico,
+  cargando,
+  onActualizar,
+  lugarElegido,
+  onBuscar,
+  onVolver,
+  style,
+}: ActualProps) {
+  const [buscando, setBuscando] = useState(false);
+  const [busqueda, setBusqueda] = useState('');
+  const [errorBusqueda, setErrorBusqueda] = useState('');
+
+  const buscar = async () => {
+    if (!busqueda.trim()) return;
+    setErrorBusqueda('');
+    try {
+      await onBuscar(busqueda);
+      setBuscando(false);
+      setBusqueda('');
+    } catch (error) {
+      setErrorBusqueda(error instanceof Error ? error.message : 'No se pudo buscar ese lugar.');
+    }
+  };
+
   return (
     <Tarjeta style={[styles.actual, style]}>
       <View style={styles.actualArriba}>
         <Flotar altura={8}>
           <Text style={styles.iconoGrande}>{iconoClima(pronostico?.codigoActual)}</Text>
         </Flotar>
-        <Pressable
-          onPress={onActualizar}
-          disabled={cargando}
-          style={styles.botonRedondo}
-          accessibilityLabel="Actualizar clima"
-        >
-          {cargando ? (
-            <ActivityIndicator size="small" color={colores.texto} />
-          ) : (
-            <Ionicons name="refresh" size={18} color={colores.texto} />
-          )}
-        </Pressable>
+        <View style={styles.botones}>
+          <Pressable
+            onPress={() => {
+              setBuscando((valor) => !valor);
+              setErrorBusqueda('');
+            }}
+            style={[styles.botonRedondo, buscando && styles.botonActivo]}
+            accessibilityLabel="Buscar el clima de otra ciudad"
+          >
+            <Ionicons name={buscando ? 'close' : 'search'} size={18} color={colores.texto} />
+          </Pressable>
+          <Pressable onPress={onActualizar} disabled={cargando} style={styles.botonRedondo} accessibilityLabel="Actualizar clima">
+            {cargando ? <ActivityIndicator size="small" color={colores.texto} /> : <Ionicons name="refresh" size={18} color={colores.texto} />}
+          </Pressable>
+        </View>
       </View>
+
+      {buscando ? (
+        <View style={styles.buscador}>
+          <View style={styles.buscadorCampo}>
+            <Ionicons name="earth-outline" size={16} color={colores.textoSecundario} />
+            <TextInput
+              style={styles.buscadorEntrada}
+              placeholder="Londres, Tokio, Nueva York…"
+              placeholderTextColor={colores.textoTenue}
+              value={busqueda}
+              onChangeText={(texto) => {
+                setBusqueda(texto);
+                setErrorBusqueda('');
+              }}
+              onSubmitEditing={buscar}
+              returnKeyType="search"
+              autoFocus
+              autoCorrect={false}
+            />
+            <Pressable onPress={buscar} disabled={cargando} hitSlop={8} accessibilityLabel="Buscar">
+              <Ionicons name="arrow-forward-circle" size={22} color={colores.primario} />
+            </Pressable>
+          </View>
+          {errorBusqueda ? <Text style={styles.errorBusqueda}>{errorBusqueda}</Text> : null}
+        </View>
+      ) : null}
 
       {clima ? (
         <>
@@ -55,9 +113,18 @@ export function TarjetaActual({ clima, pronostico, cargando, onActualizar, style
           </View>
           <View style={styles.divisor} />
           <View style={styles.renglon}>
-            <Ionicons name="location-outline" size={15} color={colores.textoSecundario} />
-            <Text style={styles.detalle}>{clima.ciudad}</Text>
+            <Ionicons name={lugarElegido ? 'earth' : 'location-outline'} size={15} color={lugarElegido ? colores.primario : colores.textoSecundario} />
+            <Text style={[styles.detalle, styles.flex]}>{[clima.ciudad, lugarElegido ? null : clima.estado].filter(Boolean).join(', ')}</Text>
           </View>
+          {lugarElegido ? (
+            <View style={styles.elegida}>
+              <Text style={styles.elegidaTexto}>Ubicación elegida</Text>
+              <Pressable onPress={() => onVolver().catch(() => {})} disabled={cargando} style={styles.volver}>
+                <Ionicons name="navigate" size={13} color={colores.primario} />
+                <Text style={styles.volverTexto}>Mi ubicación</Text>
+              </Pressable>
+            </View>
+          ) : null}
           <View style={styles.renglon}>
             <Ionicons name="calendar-outline" size={15} color={colores.textoSecundario} />
             <Text style={styles.detalle}>
@@ -107,7 +174,7 @@ export function Destacados({ clima, pronostico: p, style }: DestacadosProps) {
         <View style={[estilosTarjeta.interna, styles.grande]}>
           <Text style={estilosTarjeta.etiqueta}>Amanecer y atardecer</Text>
           <View style={styles.relleno}>
-            <Barra progreso={p ? progresoDelDia(p.amanecer, p.atardecer) : 0} color={colores.sol} punto />
+            <Barra progreso={p ? progresoDelDia(p.amanecerMs, p.atardecerMs) : 0} color={colores.sol} punto />
           </View>
           <View style={styles.solFila}>
             <Sol icono="sunny-outline" etiqueta="Amanecer" hora={p ? horaDeIso(p.amanecer) : '—'} />
@@ -140,9 +207,7 @@ export function Destacados({ clima, pronostico: p, style }: DestacadosProps) {
   );
 }
 
-function progresoDelDia(amanecer: string, atardecer: string) {
-  const inicio = new Date(amanecer).getTime();
-  const fin = new Date(atardecer).getTime();
+function progresoDelDia(inicio: number, fin: number) {
   return Math.min(1, Math.max(0, (Date.now() - inicio) / (fin - inicio)));
 }
 
@@ -333,6 +398,61 @@ const styles = StyleSheet.create({
   },
   iconoGrande: {
     fontSize: 64,
+  },
+  botones: {
+    flexDirection: 'row',
+    gap: espacio.sm,
+  },
+  botonActivo: {
+    backgroundColor: colores.primarioSuave,
+  },
+  buscador: {
+    gap: 6,
+  },
+  buscadorCampo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: espacio.sm,
+    backgroundColor: colores.tarjetaAlta,
+    borderWidth: 1,
+    borderColor: colores.primario,
+    borderRadius: radio.sm,
+    paddingHorizontal: espacio.sm + 2,
+  },
+  buscadorEntrada: {
+    flex: 1,
+    minWidth: 0,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: colores.texto,
+  },
+  errorBusqueda: {
+    fontSize: 12,
+    color: colores.error,
+  },
+  elegida: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colores.primarioSuave,
+    borderRadius: radio.sm,
+    paddingHorizontal: espacio.sm + 2,
+    paddingVertical: 6,
+  },
+  elegidaTexto: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colores.primario,
+  },
+  volver: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  volverTexto: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colores.primario,
   },
   botonRedondo: {
     width: 40,

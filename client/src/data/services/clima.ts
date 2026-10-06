@@ -76,19 +76,12 @@ async function obtenerLugar(latitud: number, longitud: number): Promise<Lugar> {
   }
 }
 
-export async function obtenerClima(): Promise<RegistroClima> {
-  const permiso = await Location.requestForegroundPermissionsAsync();
-  if (!permiso.granted) {
-    throw new Error('Se necesita el permiso de ubicación.');
-  }
-
-  const posicion = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-  const { latitude: latitud, longitude: longitud } = posicion.coords;
-
+/** Clima actual en unas coordenadas, con el nombre del lugar ya resuelto. */
+async function climaEn(latitud: number, longitud: number, lugar: Lugar): Promise<RegistroClima> {
   const url =
     `https://api.open-meteo.com/v1/forecast?latitude=${latitud}&longitude=${longitud}` +
     '&current=temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code';
-  const [respuesta, lugar] = await Promise.all([fetch(url), obtenerLugar(latitud, longitud)]);
+  const respuesta = await fetch(url);
   if (!respuesta.ok) {
     throw new Error(`Open-Meteo respondió ${respuesta.status}.`);
   }
@@ -104,4 +97,54 @@ export async function obtenerClima(): Promise<RegistroClima> {
     latitud,
     longitud,
   };
+}
+
+/** Clima en la ubicación real del dispositivo (GPS). */
+export async function obtenerClima(): Promise<RegistroClima> {
+  const permiso = await Location.requestForegroundPermissionsAsync();
+  if (!permiso.granted) {
+    throw new Error('Se necesita el permiso de ubicación.');
+  }
+
+  const posicion = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+  const { latitude: latitud, longitude: longitud } = posicion.coords;
+  const lugar = await obtenerLugar(latitud, longitud);
+  return climaEn(latitud, longitud, lugar);
+}
+
+/* ───────────── Otras ciudades del mundo ───────────── */
+
+/** Un lugar elegido por nombre ("Londres", "Tokio"…), en lugar de la ubicación del GPS. */
+export type LugarElegido = Lugar & { latitud: number; longitud: number; pais: string };
+
+const recortar = (texto: string, maximo: number) => (texto.length > maximo ? texto.slice(0, maximo) : texto);
+
+/** Busca una ciudad por su nombre con la geocodificación de Open-Meteo (gratis, sin API key). */
+export async function buscarLugar(nombre: string): Promise<LugarElegido> {
+  const url =
+    'https://geocoding-api.open-meteo.com/v1/search' +
+    `?name=${encodeURIComponent(nombre.trim())}&count=1&language=es&format=json`;
+  const respuesta = await fetch(url);
+  if (!respuesta.ok) throw new Error(`La búsqueda de lugares respondió ${respuesta.status}.`);
+  const resultado = (await respuesta.json()).results?.[0];
+  if (!resultado) throw new Error(`No encontré ningún lugar llamado "${nombre}".`);
+
+  const pais: string = resultado.country ?? '';
+  const enMexico = pais === 'México';
+  const region: string | null = resultado.admin1 ?? null;
+  return {
+    // Fuera de México el país va junto al estado, para que en la base se sepa dónde fue.
+    ciudad: enMexico || !pais ? resultado.name : `${resultado.name}, ${pais}`,
+    municipio: recortar(resultado.name, 80),
+    estado: recortar(enMexico ? (region ?? pais) : [region, pais].filter(Boolean).join(', '), 50) || null,
+    latitud: resultado.latitude,
+    longitud: resultado.longitude,
+    pais,
+  };
+}
+
+/** Clima de un lugar elegido por nombre. */
+export function obtenerClimaDe(lugar: LugarElegido): Promise<RegistroClima> {
+  const { latitud, longitud, pais, ...nombre } = lugar;
+  return climaEn(latitud, longitud, nombre);
 }

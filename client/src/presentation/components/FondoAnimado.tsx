@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Platform, StyleSheet, View, useWindowDimensions } from 'react-native';
 
 import type { Pronostico } from '../../data/services/pronostico';
@@ -20,7 +20,7 @@ export function cieloDe(codigo: number | undefined): Cielo {
 export function esDeNoche(pronostico: Pronostico | null): boolean {
   if (!pronostico) return false;
   const ahora = Date.now();
-  return ahora < new Date(pronostico.amanecer).getTime() || ahora > new Date(pronostico.atardecer).getTime();
+  return ahora < pronostico.amanecerMs || ahora > pronostico.atardecerMs;
 }
 
 // Paleta de las manchas de fondo según el cielo (siempre en tonos azules, con su acento).
@@ -29,7 +29,7 @@ const PALETAS: Record<Cielo | 'noche', [string, string, string]> = {
   nublado: ['#3B6FD1', '#6B7FA8', '#2DB7D6'],
   niebla: ['#56708F', '#8193AD', '#3C5A80'],
   lluvia: ['#1F5FBF', '#3A4FA8', '#1BA3C6'],
-  tormenta: ['#3D2FA8', '#1F4FBF', '#7C5CFF'],
+  tormenta: ['#2A1F7A', '#152E7A', '#5B3FD1'],
   nieve: ['#7FB2FF', '#B8D4FF', '#4C9EFF'],
   noche: ['#1B2F7A', '#4B2FA8', '#0E6E8C'],
 };
@@ -46,7 +46,7 @@ export function FondoAnimado({ cielo, noche = false }: Props) {
       <Mancha color={paleta[0]} tamano={520} desde={{ x: -0.15, y: -0.1 }} hacia={{ x: 0.1, y: 0.05 }} duracion={14000} />
       <Mancha color={paleta[1]} tamano={420} desde={{ x: 0.7, y: 0.05 }} hacia={{ x: 0.55, y: 0.25 }} duracion={17000} />
       <Mancha color={paleta[2]} tamano={480} desde={{ x: 0.25, y: 0.7 }} hacia={{ x: 0.45, y: 0.55 }} duracion={20000} />
-      <View style={[StyleSheet.absoluteFill, styles.velo]} />
+      <View style={[StyleSheet.absoluteFill, styles.velo, cielo === 'tormenta' && styles.veloTormenta]} />
       <EfectoClima cielo={cielo} noche={noche} />
     </View>
   );
@@ -103,8 +103,17 @@ export function PrimerPlanoClima({ cielo }: { cielo: Cielo }) {
     );
   }
   return (
-    <View style={[StyleSheet.absoluteFill, styles.primerPlano]} pointerEvents="none">
-      {cielo === 'nieve' ? <Nieve cantidad={12} /> : <Lluvia cantidad={cielo === 'tormenta' ? 24 : 16} rapida={cielo === 'tormenta'} />}
+    <View style={StyleSheet.absoluteFill} pointerEvents="none">
+      <View style={[StyleSheet.absoluteFill, styles.primerPlano]}>
+        {cielo === 'nieve' ? (
+          <Nieve cantidad={12} />
+        ) : cielo === 'tormenta' ? (
+          <Lluvia cantidad={45} rapida viento={0.45} />
+        ) : (
+          <Lluvia cantidad={16} />
+        )}
+      </View>
+      {cielo === 'tormenta' ? <DestelloFrente /> : null}
     </View>
   );
 }
@@ -116,7 +125,7 @@ export function EfectoClima({ cielo, noche }: { cielo: Cielo; noche: boolean }) 
     case 'tormenta':
       return (
         <>
-          <Lluvia cantidad={70} rapida />
+          <Lluvia cantidad={120} rapida viento={0.45} />
           <Relampagos />
         </>
       );
@@ -140,14 +149,14 @@ export function EfectoClima({ cielo, noche }: { cielo: Cielo; noche: boolean }) 
 
 const azar = (min: number, max: number) => min + Math.random() * (max - min);
 
-function Lluvia({ cantidad, rapida = false }: { cantidad: number; rapida?: boolean }) {
+function Lluvia({ cantidad, rapida = false, viento = 0.18 }: { cantidad: number; rapida?: boolean; viento?: number }) {
   const gotas = useMemo(
     () =>
       Array.from({ length: cantidad }, (_, i) => ({
         id: i,
         x: Math.random(),
-        largo: azar(14, 28),
-        duracion: azar(rapida ? 450 : 650, rapida ? 800 : 1150),
+        largo: azar(rapida ? 20 : 14, rapida ? 38 : 28),
+        duracion: azar(rapida ? 380 : 650, rapida ? 700 : 1150),
         retraso: azar(0, 1500),
         opacidad: azar(0.4, 0.85),
       })),
@@ -156,13 +165,27 @@ function Lluvia({ cantidad, rapida = false }: { cantidad: number; rapida?: boole
   return (
     <>
       {gotas.map((gota) => (
-        <Gota key={gota.id} {...gota} />
+        <Gota key={gota.id} {...gota} viento={viento} />
       ))}
     </>
   );
 }
 
-function Gota({ x, largo, duracion, retraso, opacidad }: { x: number; largo: number; duracion: number; retraso: number; opacidad: number }) {
+function Gota({
+  x,
+  largo,
+  duracion,
+  retraso,
+  opacidad,
+  viento,
+}: {
+  x: number;
+  largo: number;
+  duracion: number;
+  retraso: number;
+  opacidad: number;
+  viento: number;
+}) {
   const { width, height } = useWindowDimensions();
   const t = useBucle(duracion, { retraso });
   return (
@@ -172,11 +195,12 @@ function Gota({ x, largo, duracion, retraso, opacidad }: { x: number; largo: num
         {
           height: largo,
           opacity: opacidad,
-          left: x * (width + 120) - 60,
+          // Con más viento las gotas empiezan más a la derecha, caen más inclinadas y se desvían más.
+          left: x * (width + height * viento + 120) - 60,
           transform: [
             { translateY: t.interpolate({ inputRange: [0, 1], outputRange: [-60, height + 40] }) },
-            { translateX: t.interpolate({ inputRange: [0, 1], outputRange: [0, -height * 0.18] }) },
-            { rotate: '10deg' },
+            { translateX: t.interpolate({ inputRange: [0, 1], outputRange: [0, -height * viento] }) },
+            { rotate: `${(Math.atan(viento) * 180) / Math.PI}deg` },
           ],
         },
       ]}
@@ -184,23 +208,139 @@ function Gota({ x, largo, duracion, retraso, opacidad }: { x: number; largo: num
   );
 }
 
+/* Tormenta eléctrica: rayos en zigzag con resplandor y destellos que también iluminan por delante. */
+
+// Avisa a la capa de enfrente cuándo cae un rayo, para que su destello vaya sincronizado.
+const oyentesRayo = new Set<(fuerza: number, segmentos: Segmento[]) => void>();
+
+type Segmento = { x: number; y: number; largo: number; angulo: number; grosor: number };
+
+/** Un rayo como lista de segmentos en zigzag (con una rama), desde arriba hasta `fondo`. */
+function generarRayo(ancho: number, alto: number): Segmento[] {
+  const segmentos: Segmento[] = [];
+  const trazo = (x0: number, y0: number, pasos: number, bajada: number, grosor: number, rama: boolean) => {
+    let x = x0;
+    let y = y0;
+    for (let i = 0; i < pasos; i++) {
+      const nx = x + azar(-ancho * 0.05, ancho * 0.05);
+      const ny = y + bajada * azar(0.7, 1.3);
+      const dx = nx - x;
+      const dy = ny - y;
+      segmentos.push({ x, y, largo: Math.hypot(dx, dy), angulo: (Math.atan2(dy, dx) * 180) / Math.PI - 90, grosor });
+      if (rama && i === 2) trazo(nx, ny, 3, bajada * 0.8, grosor * 0.55, false);
+      x = nx;
+      y = ny;
+    }
+  };
+  trazo(azar(ancho * 0.12, ancho * 0.88), -10, 7, azar(alto * 0.07, alto * 0.1), 3.5, true);
+  return segmentos;
+}
+
 function Relampagos() {
+  const { width, height } = useWindowDimensions();
   const destello = useRef(new Animated.Value(0)).current;
+  const rayo = useRef(new Animated.Value(0)).current;
+  const [segmentos, setSegmentos] = useState<Segmento[]>([]);
+
   useEffect(() => {
     let temporizador: ReturnType<typeof setTimeout>;
-    const disparar = () => {
-      Animated.sequence([
-        Animated.timing(destello, { toValue: 0.55, duration: 60, useNativeDriver: NATIVO }),
-        Animated.timing(destello, { toValue: 0.05, duration: 90, useNativeDriver: NATIVO }),
-        Animated.timing(destello, { toValue: 0.35, duration: 50, useNativeDriver: NATIVO }),
-        Animated.timing(destello, { toValue: 0, duration: 450, easing: Easing.out(Easing.quad), useNativeDriver: NATIVO }),
+    const caer = (doble: boolean) => {
+      const nuevo = generarRayo(width, height);
+      setSegmentos(nuevo);
+      oyentesRayo.forEach((oyente) => oyente(doble ? 1 : 0.8, nuevo));
+      Animated.parallel([
+        // Parpadeo del cielo: fuerte, se apaga, vuelve a encender y se desvanece.
+        Animated.sequence([
+          Animated.timing(destello, { toValue: 0.75, duration: 50, useNativeDriver: NATIVO }),
+          Animated.timing(destello, { toValue: 0.1, duration: 70, useNativeDriver: NATIVO }),
+          Animated.timing(destello, { toValue: 0.6, duration: 50, useNativeDriver: NATIVO }),
+          Animated.timing(destello, { toValue: 0, duration: 600, easing: Easing.out(Easing.quad), useNativeDriver: NATIVO }),
+        ]),
+        // El rayo aparece de golpe, titila y se apaga un poco después que el cielo.
+        Animated.sequence([
+          Animated.timing(rayo, { toValue: 1, duration: 40, useNativeDriver: NATIVO }),
+          Animated.timing(rayo, { toValue: 0.3, duration: 60, useNativeDriver: NATIVO }),
+          Animated.timing(rayo, { toValue: 1, duration: 50, useNativeDriver: NATIVO }),
+          Animated.timing(rayo, { toValue: 0, duration: 750, easing: Easing.in(Easing.quad), useNativeDriver: NATIVO }),
+        ]),
       ]).start();
-      temporizador = setTimeout(disparar, azar(3500, 9000));
     };
-    temporizador = setTimeout(disparar, 1500);
+    const siguiente = () => {
+      caer(false);
+      // A veces cae un segundo rayo casi enseguida.
+      if (Math.random() < 0.35) setTimeout(() => caer(true), azar(250, 600));
+      temporizador = setTimeout(siguiente, azar(2000, 5000));
+    };
+    temporizador = setTimeout(siguiente, 900);
     return () => clearTimeout(temporizador);
-  }, [destello]);
-  return <Animated.View style={[StyleSheet.absoluteFill, styles.relampago, { opacity: destello }]} />;
+  }, [destello, rayo, width, height]);
+
+  return (
+    <>
+      <Animated.View style={[StyleSheet.absoluteFill, styles.relampago, { opacity: destello }]} />
+      <Rayo segmentos={segmentos} opacidad={rayo} />
+    </>
+  );
+}
+
+function Rayo({ segmentos, opacidad }: { segmentos: Segmento[]; opacidad: Animated.Value | Animated.AnimatedInterpolation<number> }) {
+  return (
+    <Animated.View style={[StyleSheet.absoluteFill, { opacity: opacidad }]}>
+      {segmentos.map((segmento, i) => (
+        <View
+          key={i}
+          style={[
+            styles.rayoSegmento,
+            {
+              left: segmento.x - segmento.grosor / 2,
+              top: segmento.y,
+              width: segmento.grosor,
+              height: segmento.largo,
+              transformOrigin: 'top',
+              transform: [{ rotate: `${segmento.angulo}deg` }],
+            },
+          ]}
+        />
+      ))}
+    </Animated.View>
+  );
+}
+
+/**
+ * Por delante de las tarjetas: el mismo rayo (para que no lo borre el desenfoque del vidrio)
+ * y un destello más suave que el del fondo, sincronizados con cada caída.
+ */
+function DestelloFrente() {
+  const destello = useRef(new Animated.Value(0)).current;
+  const rayo = useRef(new Animated.Value(0)).current;
+  const [segmentos, setSegmentos] = useState<Segmento[]>([]);
+  useEffect(() => {
+    const oyente = (fuerza: number, nuevos: Segmento[]) => {
+      setSegmentos(nuevos);
+      Animated.sequence([
+        Animated.timing(rayo, { toValue: 0.9, duration: 40, useNativeDriver: NATIVO }),
+        Animated.timing(rayo, { toValue: 0.25, duration: 60, useNativeDriver: NATIVO }),
+        Animated.timing(rayo, { toValue: 0.85, duration: 50, useNativeDriver: NATIVO }),
+        Animated.timing(rayo, { toValue: 0, duration: 700, easing: Easing.in(Easing.quad), useNativeDriver: NATIVO }),
+      ]).start();
+      Animated.sequence([
+        Animated.timing(destello, { toValue: 0.32 * fuerza, duration: 50, useNativeDriver: NATIVO }),
+        Animated.timing(destello, { toValue: 0.05, duration: 70, useNativeDriver: NATIVO }),
+        Animated.timing(destello, { toValue: 0.22 * fuerza, duration: 50, useNativeDriver: NATIVO }),
+        Animated.timing(destello, { toValue: 0, duration: 500, easing: Easing.out(Easing.quad), useNativeDriver: NATIVO }),
+      ]).start();
+    };
+    oyentesRayo.add(oyente);
+    return () => {
+      oyentesRayo.delete(oyente);
+    };
+  }, [destello, rayo]);
+  return (
+    <>
+      <Animated.View style={[StyleSheet.absoluteFill, styles.relampago, { opacity: destello }]} />
+      <Rayo segmentos={segmentos} opacidad={rayo} />
+    </>
+  );
 }
 
 function Nieve({ cantidad }: { cantidad: number }) {
@@ -408,6 +548,9 @@ const styles = StyleSheet.create({
   primerPlano: {
     opacity: 0.35,
   },
+  veloTormenta: {
+    backgroundColor: 'rgba(3,4,12,0.55)',
+  },
   velo: {
     backgroundColor: 'rgba(5,8,14,0.35)',
   },
@@ -421,6 +564,12 @@ const styles = StyleSheet.create({
   },
   relampago: {
     backgroundColor: '#DCE8FF',
+  },
+  rayoSegmento: {
+    position: 'absolute',
+    borderRadius: 2,
+    backgroundColor: '#FFFFFF',
+    boxShadow: '0 0 8px #E4ECFF, 0 0 22px #9C8BFF, 0 0 46px #6A5CFF',
   },
   copo: {
     position: 'absolute',

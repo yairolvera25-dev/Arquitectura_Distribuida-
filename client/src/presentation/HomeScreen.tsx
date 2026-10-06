@@ -1,12 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import { GEMINI, type ServidorId } from '../config';
 import { cerrarSesion } from '../data/services/autenticacion';
 import { bitacora, cronometro } from '../data/services/bitacora';
-import { obtenerClima, type RegistroClima } from '../data/services/clima';
+import { buscarLugar, obtenerClima, obtenerClimaDe, type LugarElegido, type RegistroClima } from '../data/services/clima';
 import { conversarConBarbie } from '../data/services/gemini';
 import { obtenerPronostico, type Pronostico } from '../data/services/pronostico';
 import { consultarBitacora, respaldarBitacora } from '../data/services/respaldo';
@@ -39,15 +39,24 @@ export default function HomeScreen() {
   const [cargando, setCargando] = useState(true);
   const [errorClima, setErrorClima] = useState('');
   const [servidores, setServidores] = useState<Partial<Record<ServidorId, EstadoServidor>>>({});
+  // Ciudad elegida ("Barbie, ¿cuál es el clima en Londres?"); null = ubicación real del GPS.
+  const [lugarElegido, setLugarElegido] = useState<LugarElegido | null>(null);
+  const lugarRef = useRef<LugarElegido | null>(null);
+  // Último clima cargado: Barbie puede cambiar de ciudad y guardar en la misma frase, así que
+  // guardar lee el clima de aquí y no del estado de React (que se actualiza hasta el siguiente render).
+  const climaRef = useRef<RegistroClima | null>(null);
 
-  const cargarClima = useCallback(async () => {
+  /** Carga el clima del lugar elegido (o del GPS) y devuelve el clima nuevo. */
+  const cargarClima = useCallback(async (): Promise<RegistroClima | null> => {
     setCargando(true);
     const tiempo = cronometro();
+    const lugar = lugarRef.current;
     try {
-      const nuevo = await obtenerClima();
+      const nuevo = lugar ? await obtenerClimaDe(lugar) : await obtenerClima();
+      climaRef.current = nuevo;
       setClima(nuevo);
       setErrorClima('');
-      bitacora.exito('clima', `Clima obtenido: ${nuevo.ciudad}, ${nuevo.temperatura} °C`, {
+      bitacora.exito('clima', `Clima obtenido: ${nuevo.ciudad}, ${nuevo.temperatura} °C${lugar ? ' (ubicación elegida)' : ''}`, {
         detalle: `${nuevo.latitud.toFixed(4)}, ${nuevo.longitud.toFixed(4)} · humedad ${nuevo.humedad} % · viento ${nuevo.viento} km/h`,
         duracionMs: tiempo(),
       });
@@ -58,21 +67,53 @@ export default function HomeScreen() {
           detalle: error instanceof Error ? error.message : String(error),
         });
       });
+      return nuevo;
     } catch (error) {
       const mensaje = error instanceof Error ? error.message : 'No se pudo obtener el clima.';
       bitacora.error('clima', mensaje, { duracionMs: tiempo() });
       setErrorClima(mensaje);
+      throw error;
     } finally {
       setCargando(false);
     }
   }, []);
 
   useEffect(() => {
-    cargarClima();
+    cargarClima().catch(() => {});
+  }, [cargarClima]);
+
+  /** Cambia el dashboard a otra ciudad del mundo. Devuelve su clima. */
+  const cambiarUbicacion = useCallback(
+    async (nombre: string) => {
+      const lugar = await buscarLugar(nombre);
+      bitacora.info('clima', `Ubicación cambiada a ${lugar.ciudad}`, {
+        detalle: `${lugar.latitud.toFixed(4)}, ${lugar.longitud.toFixed(4)}`,
+      });
+      lugarRef.current = lugar;
+      setLugarElegido(lugar);
+      setPronostico(null);
+      return (await cargarClima())!;
+    },
+    [cargarClima],
+  );
+
+  /** Vuelve a la ubicación real (GPS). */
+  const volverAMiUbicacion = useCallback(async () => {
+    lugarRef.current = null;
+    setLugarElegido(null);
+    setPronostico(null);
+    bitacora.info('clima', 'De vuelta a la ubicación real (GPS)');
+    return (await cargarClima())!;
+  }, [cargarClima]);
+
+  // Para los botones: el error ya queda en pantalla y en la bitácora.
+  const actualizar = useCallback(() => {
+    cargarClima().catch(() => {});
   }, [cargarClima]);
 
   const guardarEn = useCallback(
     async (servidor: ServidorId, datos?: DatoClima[]) => {
+      const clima = climaRef.current;
       if (!clima) {
         bitacora.error('clima', 'No hay datos del clima para guardar', { detalle: 'La ubicación o el clima no han cargado' });
         throw new Error('Todavía no tengo el clima para guardar, espera tantito.');
@@ -86,7 +127,7 @@ export default function HomeScreen() {
         throw error;
       }
     },
-    [clima],
+    [],
   );
 
   const onGuardar = useCallback(
@@ -99,8 +140,19 @@ export default function HomeScreen() {
 
   const onPreguntar = useCallback(
     (texto: string) =>
-      conversarConBarbie(texto, { clima, pronostico }, { guardar: guardarEn, consultar: consultarRegistros, respaldarBitacora, consultarBitacora }),
-    [clima, pronostico, guardarEn],
+      conversarConBarbie(
+        texto,
+        { clima, pronostico, ubicacionElegida: Boolean(lugarElegido) },
+        {
+          guardar: guardarEn,
+          consultar: consultarRegistros,
+          respaldarBitacora,
+          consultarBitacora,
+          cambiarUbicacion,
+          volverAMiUbicacion,
+        },
+      ),
+    [clima, pronostico, lugarElegido, guardarEn, cambiarUbicacion, volverAMiUbicacion],
   );
 
   const voz = useEscuchaContinua({ onGuardar, onPreguntar: GEMINI.apiKey ? onPreguntar : undefined });
@@ -126,7 +178,10 @@ export default function HomeScreen() {
       clima={clima}
       pronostico={pronostico}
       cargando={cargando}
-      onActualizar={cargarClima}
+      onActualizar={actualizar}
+      lugarElegido={lugarElegido}
+      onBuscar={cambiarUbicacion}
+      onVolver={volverAMiUbicacion}
       style={styles.llenar}
     />
   );
@@ -145,7 +200,7 @@ export default function HomeScreen() {
             servidores={servidores}
             cargando={cargando}
             onAlternarVoz={voz.alternar}
-            onActualizar={cargarClima}
+            onActualizar={actualizar}
             iniciales={iniciales}
             onCerrarSesion={cerrarSesion}
           />

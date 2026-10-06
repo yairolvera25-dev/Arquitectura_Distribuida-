@@ -1,6 +1,9 @@
-// Sesión iniciada en la app: el token que firman los servidores y los datos de quien entró.
+// Sesión iniciada en la app: un token POR SERVIDOR y los datos de quien entró.
+// Con un token por servidor no importa si cada uno firma con su propio TOKEN_SECRET.
 // En web se recuerda entre recargas (localStorage); en el celular vive en memoria y hay que
 // volver a iniciar sesión al abrir la app (guardarla seguro requiere expo-secure-store).
+
+import type { ServidorId } from '../../config';
 
 export type UsuarioSesion = {
   usuario: string;
@@ -9,7 +12,7 @@ export type UsuarioSesion = {
   materno: string | null;
 };
 
-export type Sesion = { token: string; usuario: UsuarioSesion };
+export type Sesion = { usuario: UsuarioSesion; tokens: Partial<Record<ServidorId, string>> };
 
 const CLAVE = 'clima-upp-sesion';
 const oyentes = new Set<() => void>();
@@ -36,7 +39,11 @@ function cargar(): Sesion | null {
   try {
     const guardada = almacen()?.getItem(CLAVE);
     const sesion: Sesion | null = guardada ? JSON.parse(guardada) : null;
-    return sesion && expiracion(sesion.token) > Date.now() ? sesion : null;
+    if (!sesion?.tokens) return null; // Sesiones de la versión anterior (un solo token): se descartan
+    const vigentes = Object.fromEntries(
+      Object.entries(sesion.tokens).filter(([, token]) => token && expiracion(token) > Date.now()),
+    );
+    return Object.keys(vigentes).length ? { ...sesion, tokens: vigentes } : null;
   } catch {
     return null;
   }
@@ -55,6 +62,15 @@ export function guardarSesion(sesion: Sesion | null) {
     // Sin almacenamiento (modo privado): la sesión dura mientras la app esté abierta.
   }
   oyentes.forEach((oyente) => oyente());
+}
+
+/** Agrega o quita el token de un servidor sin tocar el de los demás. Sin tokens, la sesión se cierra. */
+export function cambiarToken(servidor: ServidorId, token: string | null) {
+  if (!actual) return;
+  const tokens = { ...actual.tokens };
+  if (token) tokens[servidor] = token;
+  else delete tokens[servidor];
+  guardarSesion(Object.keys(tokens).length ? { ...actual, tokens } : null);
 }
 
 export function suscribirSesion(oyente: () => void) {

@@ -1,7 +1,7 @@
 import { API_KEY, SERVIDORES, type ServidorId } from '../../config';
 import { bitacora, cronometro } from './bitacora';
 import type { RegistroClima } from './clima';
-import { guardarSesion, leerSesion } from './sesion';
+import { cambiarToken, leerSesion } from './sesion';
 
 const TIEMPO_LIMITE_MS = 8000;
 
@@ -62,7 +62,7 @@ export async function pedirServidor(servidorId: ServidorId, ruta: string, opcion
     fallar(`Falta configurar la URL de ${servidor.nombre} en el archivo .env.`, null, 'Variable EXPO_PUBLIC_SERVIDOR_*_URL vacía');
   }
 
-  const token = leerSesion()?.token;
+  const token = leerSesion()?.tokens[servidorId];
   const tiempo = cronometro();
   let respuesta: Response;
   try {
@@ -90,9 +90,18 @@ export async function pedirServidor(servidorId: ServidorId, ruta: string, opcion
       Array.isArray(cuerpo?.errores) ? ` (${cuerpo.errores.join(' ')})` : ''
     }`;
     if (respuesta.status === 401 && cuerpo?.codigo === 'SESION') {
-      // El token expiró o no es válido: se cierra la sesión y la app vuelve al inicio de sesión.
-      guardarSesion(null);
-      fallar(cuerpo.error ?? 'Tu sesión expiró; vuelve a iniciar sesión.', 401, detalle, duracionMs);
+      // Este servidor no reconoce la sesión (expiró, o no estaba encendido al entrar): se quita SOLO
+      // su token. La app sigue funcionando con el otro servidor; si ya no queda ninguno, se cierra.
+      cambiarToken(servidorId, null);
+      const quedan = Object.keys(leerSesion()?.tokens ?? {}).length;
+      fallar(
+        quedan
+          ? `${servidor.nombre} no reconoce tu sesión; cierra sesión y vuelve a entrar con él encendido.`
+          : 'Tu sesión expiró; vuelve a iniciar sesión.',
+        401,
+        detalle,
+        duracionMs,
+      );
     }
     if (respuesta.status === 404) {
       // La app es más nueva que el servidor: le falta esa ruta (p. ej. /api/auth antes de actualizarlo).

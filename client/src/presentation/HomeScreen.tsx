@@ -117,7 +117,7 @@ export default function HomeScreen() {
   const listaServidores = (
     <ListaServidores
       estados={servidores}
-      deshabilitado={!clima || voz.estado === 'procesando'}
+      deshabilitado={!clima || voz.estado === 'procesando' || voz.hablando}
       onGuardar={voz.guardar}
     />
   );

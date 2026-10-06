@@ -305,7 +305,7 @@ Las cuentas viven en **los dos servidores** (tabla `Usuarios`), así que se pued
 
 - `usuario`: de 3 a 30 caracteres `a-z 0-9 . _ -`; se guarda en minúsculas.
 - `contrasena`: de 8 a 72 caracteres, con al menos una letra y un número. Se guarda como **hash scrypt** con sal aleatoria, nunca en texto.
-- El token es un JWT HS256 que dura 12 horas, firmado con `TOKEN_SECRET`. **Ese secreto es el mismo en los dos servidores**, así que la sesión de uno sirve en el otro.
+- El token es un JWT HS256 que dura 12 horas, firmado con el `TOKEN_SECRET` de cada servidor. La app inicia sesión en los dos y guarda **un token por servidor**, así que no hace falta que el secreto coincida (aunque puede ser el mismo). Entra en cuanto el primero responde y agrega el otro token en segundo plano; si un servidor rechaza la sesión, solo se quita su token y la app sigue funcionando con el otro.
 - Si el usuario no existe o la contraseña está mal, el mensaje es el mismo, para no revelar qué usuarios existen. Tras **5 intentos fallidos** desde la misma IP, ese usuario se bloquea 15 minutos.
 - **Restablecer la contraseña:** al registrarse, el primer servidor genera un **código de recuperación** de 12 caracteres (p. ej. `K7QF-M2XP-9TRW`), que la app le pasa al segundo para que sea el mismo en ambos. Se devuelve en texto **una sola vez** para que la persona lo guarde, y se almacena con hash scrypt. Con usuario + código se pone una contraseña nueva en los dos servidores. Tiene el mismo límite de intentos que el login. `upp_api` solo puede hacer `UPDATE` de la columna `Contrasena`.
 
@@ -350,7 +350,7 @@ La app puede respaldar sus logs (cada orden a Barbie, sus pasos y sus errores) e
 
 ### Actualizar los servidores para el inicio de sesión y el respaldo de logs
 
-Una sola persona genera el secreto de las sesiones y se lo pasa a la otra **por privado**:
+Cada servidor necesita un secreto para firmar las sesiones (`TOKEN_SECRET`, mínimo 32 caracteres). Puede ser el mismo en los dos o uno distinto en cada uno; nunca va en el repo ni en la app:
 
 ```bash
 openssl rand -hex 32

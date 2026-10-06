@@ -1,11 +1,11 @@
 // Registro e inicio de sesión. Las cuentas viven en los DOS servidores (tabla Usuarios en
-// SQL Server y en PostgreSQL), así que se puede entrar aunque uno esté apagado. Los dos
-// firman los tokens con el mismo secreto: la sesión que da uno sirve en el otro.
+// SQL Server y en PostgreSQL), así que se puede entrar aunque uno esté apagado. La app guarda
+// un token por servidor, así que funciona aunque cada uno firme con su propio TOKEN_SECRET.
 
 import type { ServidorId } from '../../config';
 import { bitacora } from './bitacora';
 import { ErrorServidor, pedirServidor } from './servidores';
-import { guardarSesion, type UsuarioSesion } from './sesion';
+import { cambiarToken, guardarSesion, leerSesion, type UsuarioSesion } from './sesion';
 
 const SERVIDORES_IDS: ServidorId[] = ['windows', 'linux'];
 const NUMERO: Record<ServidorId, string> = { windows: 'uno', linux: 'dos' };
@@ -82,36 +82,64 @@ export async function restablecerContrasena(usuario: string, codigo: string, con
   }
 }
 
+type RespuestaLogin = { token: string; usuario: UsuarioSesion };
+
+/** La primera promesa que se cumple; si todas fallan, rechaza con la lista de errores. */
+function primeraQueFunciona<T>(promesas: Promise<T>[]): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const errores: unknown[] = [];
+    promesas.forEach((promesa) =>
+      promesa.then(resolve, (error) => {
+        errores.push(error);
+        if (errores.length === promesas.length) reject(errores);
+      }),
+    );
+  });
+}
+
+/**
+ * Inicia sesión en los dos servidores, cada uno con SU token. Entra en cuanto el primero
+ * responde bien (no espera a uno apagado); el token del otro se agrega cuando llegue.
+ */
 export async function iniciarSesion(usuario: string, contrasena: string): Promise<UsuarioSesion> {
-  const intentos = await Promise.allSettled(
-    SERVIDORES_IDS.map((id) =>
-      pedirServidor(id, '/api/auth/login', { method: 'POST', body: JSON.stringify({ usuario, contrasena }) }),
-    ),
-  );
+  const login = (id: ServidorId) =>
+    pedirServidor(id, '/api/auth/login', { method: 'POST', body: JSON.stringify({ usuario, contrasena }) }) as Promise<RespuestaLogin>;
+  const intentos = SERVIDORES_IDS.map((id) => login(id).then((respuesta) => ({ id, ...respuesta })));
 
-  const exito = intentos.find((intento) => intento.status === 'fulfilled');
-  if (!exito || exito.status !== 'fulfilled') {
-    const errores = intentos.flatMap((intento) => (intento.status === 'rejected' ? [intento.reason] : []));
-    throw errorPrincipal(errores);
+  let primero: RespuestaLogin & { id: ServidorId };
+  try {
+    primero = await primeraQueFunciona(intentos);
+  } catch (errores) {
+    throw errorPrincipal(errores as unknown[]);
   }
+  const datos = primero.usuario;
+  guardarSesion({ usuario: datos, tokens: { [primero.id]: primero.token } });
+  bitacora.exito('cuenta', `Sesión iniciada: ${datos.usuario} (servidor ${NUMERO[primero.id]})`);
 
-  const { token, usuario: datos } = exito.value as { token: string; usuario: UsuarioSesion };
-  guardarSesion({ token, usuario: datos });
-  bitacora.exito('cuenta', `Sesión iniciada: ${datos.usuario}`);
-
-  // Sincronización: si un servidor no conoce la cuenta (estaba apagado al registrarse),
-  // se le crea ahora con los mismos datos. Si ya la tiene con otra contraseña, responde 409 y no se toca.
-  intentos.forEach((intento, i) => {
-    if (intento.status === 'rejected' && status(intento.reason) === 401) {
-      const id = SERVIDORES_IDS[i];
-      pedirServidor(id, '/api/auth/registro', {
-        method: 'POST',
-        body: JSON.stringify({ ...datos, contrasena }),
-      }).then(
-        () => bitacora.exito('cuenta', `Cuenta copiada al servidor ${NUMERO[id]}`),
-        () => bitacora.aviso('cuenta', `No se pudo copiar la cuenta al servidor ${NUMERO[id]}`),
-      );
-    }
+  // Los demás servidores, en segundo plano.
+  const sigueLaMismaSesion = () => leerSesion()?.usuario.usuario === datos.usuario;
+  SERVIDORES_IDS.forEach((id, i) => {
+    if (id === primero.id) return;
+    intentos[i].then(
+      ({ token }) => {
+        if (!sigueLaMismaSesion()) return;
+        cambiarToken(id, token);
+        bitacora.exito('cuenta', `Sesión iniciada también en el servidor ${NUMERO[id]}`);
+      },
+      async (error) => {
+        if (status(error) !== 401) return; // Apagado o sin la función: se queda sin token de ese servidor
+        // No conoce la cuenta (estaba apagado al registrarse): se le crea con los mismos datos y se
+        // entra. Si ya la tiene con otra contraseña, responde 409 y no se toca.
+        try {
+          await pedirServidor(id, '/api/auth/registro', { method: 'POST', body: JSON.stringify({ ...datos, contrasena }) });
+          bitacora.exito('cuenta', `Cuenta copiada al servidor ${NUMERO[id]}`);
+          const { token } = await login(id);
+          if (sigueLaMismaSesion()) cambiarToken(id, token);
+        } catch {
+          bitacora.aviso('cuenta', `No se pudo copiar la cuenta al servidor ${NUMERO[id]}`);
+        }
+      },
+    );
   });
   return datos;
 }

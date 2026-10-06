@@ -211,7 +211,8 @@ export default function PantallaAcceso() {
                   onChangeText={cambiar('usuario')}
                   autoCapitalize="none"
                   autoCorrect={false}
-                  autoComplete="username"
+                  autoComplete="off"
+                    importantForAutofill="no"
                   returnKeyType="next"
                   onSubmitEditing={() => contrasenaRef.current?.focus()}
                 />
@@ -235,7 +236,8 @@ export default function PantallaAcceso() {
                   onChangeText={cambiar('contrasena')}
                   secureTextEntry={!verContrasena}
                   autoCapitalize="none"
-                  autoComplete={modo === 'entrar' ? 'current-password' : 'new-password'}
+                  autoComplete="off"
+                    importantForAutofill="no"
                   onSubmitEditing={modo === 'entrar' ? enviar : undefined}
                   accion={ojo}
                 />
@@ -248,7 +250,8 @@ export default function PantallaAcceso() {
                       onChangeText={cambiar('confirmar')}
                       secureTextEntry={!verContrasena}
                       autoCapitalize="none"
-                      autoComplete="new-password"
+                      autoComplete="off"
+                    importantForAutofill="no"
                       onSubmitEditing={enviar}
                     />
                     <Text style={styles.ayuda}>Mínimo 8 caracteres, con al menos una letra y un número.</Text>
@@ -318,6 +321,8 @@ type CampoProps = TextInputProps & {
   ref?: React.Ref<TextInput>;
 };
 
+// El autocompletado del navegador está apagado en todos los campos: Chrome volvía a escribir
+// una contraseña guardada (o una sugerida) cada vez que se borraba.
 function Campo({ icono, accion, style, ref, ...props }: CampoProps) {
   return (
     <View style={[styles.campo, style]}>

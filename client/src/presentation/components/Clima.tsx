@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { useState } from 'react';
 import { ActivityIndicator, Animated, Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
 import type { RegistroClima } from '../../data/services/clima';
@@ -116,9 +117,24 @@ export function Destacados({ clima, pronostico: p, style }: DestacadosProps) {
       </View>
 
       <View style={styles.cuadricula}>
-        <Pequena etiqueta="Humedad" numero={clima?.humedad} unidad="%" icono="water-outline" />
-        <Pequena etiqueta="Visibilidad" numero={p?.visibilidadKm} decimales={1} unidad="km" icono="eye-outline" />
-        <Pequena etiqueta="Sensación" numero={p?.sensacion} unidad="°" icono="thermometer-outline" />
+        <Pequena etiqueta="Humedad" numero={clima?.humedad} unidad="%" icono="water-outline" progreso={(clima?.humedad ?? 0) / 100} color="#38BDF8" />
+        <Pequena
+          etiqueta="Visibilidad"
+          numero={p?.visibilidadKm}
+          decimales={1}
+          unidad="km"
+          icono="eye-outline"
+          progreso={Math.min((p?.visibilidadKm ?? 0) / 10, 1)}
+          color="#A78BFA"
+        />
+        <Pequena
+          etiqueta="Sensación"
+          numero={p?.sensacion}
+          unidad="°"
+          icono="thermometer-outline"
+          progreso={Math.min(Math.max(((p?.sensacion ?? -10) + 10) / 50, 0), 1)}
+          color={(p?.sensacion ?? 0) >= 28 ? '#FB923C' : colores.primario}
+        />
       </View>
     </Tarjeta>
   );
@@ -152,18 +168,25 @@ function BarrasViento({ valores }: { valores: number[] }) {
 }
 
 /** Barra que crece desde abajo al aparecer; la de la hora actual además late. */
+/**
+ * Barra del viento: crece al aparecer y después "respira" sin parar (sube y baja un poco con su
+ * propio ritmo), como una gráfica en vivo. La de la hora actual además brilla.
+ */
 function BarraViento({ alto, actual, retraso }: { alto: number; actual: boolean; retraso: number }) {
   const crece = useProgreso(1, retraso, 700);
-  const late = useBucle(1400, { vaiven: true, activo: actual });
-  // Alto (animación de diseño) y opacidad (animación nativa) van en capas distintas.
+  const ola = useBucle(900 + (retraso % 7) * 110, { vaiven: true, retraso: retraso + 700 });
+  // Alto (animación de diseño) y escala/opacidad (animación nativa) van en capas distintas.
   return (
     <Animated.View style={[styles.barraViento, { height: crece.interpolate({ inputRange: [0, 1], outputRange: [0, alto] }) }]}>
       <Animated.View
         style={[
           styles.barraRelleno,
           {
-            backgroundColor: actual ? colores.primario : 'rgba(255,255,255,0.18)',
-            opacity: actual ? late.interpolate({ inputRange: [0, 1], outputRange: [0.75, 1] }) : 1,
+            backgroundColor: actual ? colores.primario : 'rgba(150,190,255,0.28)',
+            boxShadow: actual ? `0 0 10px ${colores.primario}` : undefined,
+            opacity: ola.interpolate({ inputRange: [0, 1], outputRange: actual ? [0.8, 1] : [0.65, 1] }),
+            transformOrigin: 'bottom',
+            transform: [{ scaleY: ola.interpolate({ inputRange: [0, 1], outputRange: [0.72, 1] }) }],
           },
         ]}
       />
@@ -171,13 +194,35 @@ function BarraViento({ alto, actual, retraso }: { alto: number; actual: boolean;
   );
 }
 
+/** Destello de luz que recorre una barra cada pocos segundos. */
+function Destello({ ancho, retraso = 0 }: { ancho: number; retraso?: number }) {
+  const t = useBucle(2600, { retraso, activo: ancho > 0 });
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[
+        styles.destello,
+        {
+          transform: [
+            { translateX: t.interpolate({ inputRange: [0, 0.6, 1], outputRange: [-50, ancho + 10, ancho + 10] }) },
+            { skewX: '-20deg' },
+          ],
+        },
+      ]}
+    />
+  );
+}
+
 function Barra({ progreso, color, punto }: { progreso: number; color: string; punto?: boolean }) {
   const ancho = useProgreso(progreso, 300, 1400);
   const brillo = useBucle(1800, { vaiven: true, activo: Boolean(punto) });
+  const [anchoPista, setAnchoPista] = useState(0);
   const porcentaje = ancho.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] });
   return (
-    <View style={styles.pista}>
-      <Animated.View style={[styles.progreso, { width: porcentaje, backgroundColor: color }]} />
+    <View style={styles.pista} onLayout={(e) => setAnchoPista(e.nativeEvent.layout.width)}>
+      <Animated.View style={[styles.progreso, { width: porcentaje, backgroundColor: color, boxShadow: `0 0 10px ${color}` }]}>
+        <Destello ancho={anchoPista * progreso} retraso={1800} />
+      </Animated.View>
       {punto ? (
         <Animated.View style={[styles.puntoPosicion, { left: porcentaje }]}>
           <Animated.View
@@ -224,14 +269,19 @@ type PequenaProps = {
   decimales?: number;
   unidad?: string;
   icono: keyof typeof Ionicons.glyphMap;
+  progreso: number;
+  color: string;
 };
 
-function Pequena({ etiqueta, numero, decimales, unidad, icono }: PequenaProps) {
+function Pequena({ etiqueta, numero, decimales, unidad, icono, progreso, color }: PequenaProps) {
   return (
     <View style={[estilosTarjeta.interna, styles.pequena]}>
-      <View>
+      <View style={styles.flex}>
         <Text style={estilosTarjeta.etiqueta}>{etiqueta}</Text>
         <ValorAnimado numero={numero} decimales={decimales} unidad={unidad} />
+        <View style={styles.miniBarra}>
+          <Barra progreso={numero === null || numero === undefined ? 0 : progreso} color={color} />
+        </View>
       </View>
       <Flotar altura={4} duracion={3000}>
         <Ionicons name={icono} size={22} color={colores.primario} />
@@ -335,6 +385,13 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: espacio.sm,
   },
+  flex: {
+    flex: 1,
+  },
+  miniBarra: {
+    marginTop: 8,
+    marginRight: espacio.md,
+  },
   pequena: {
     flexGrow: 1,
     flexBasis: 140,
@@ -378,6 +435,14 @@ const styles = StyleSheet.create({
   progreso: {
     height: 6,
     borderRadius: 3,
+    overflow: 'hidden',
+  },
+  destello: {
+    position: 'absolute',
+    top: -4,
+    width: 26,
+    height: 14,
+    backgroundColor: 'rgba(255,255,255,0.75)',
   },
   punto: {
     width: 12,

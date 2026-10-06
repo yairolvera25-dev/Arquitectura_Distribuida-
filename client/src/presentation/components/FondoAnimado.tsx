@@ -93,7 +93,15 @@ function Mancha({
  * se vea "sobre el vidrio" y no solo detrás (donde el desenfoque la borra).
  */
 export function PrimerPlanoClima({ cielo }: { cielo: Cielo }) {
-  if (cielo !== 'lluvia' && cielo !== 'tormenta' && cielo !== 'nieve') return null;
+  if (cielo === 'despejado') return null;
+  if (cielo === 'nublado' || cielo === 'niebla') {
+    // Unas nubes tenues cruzando por encima del vidrio.
+    return (
+      <View style={StyleSheet.absoluteFill} pointerEvents="none">
+        <Nubes cantidad={cielo === 'niebla' ? 3 : 2} opacidad={cielo === 'niebla' ? 0.16 : 0.13} lentas />
+      </View>
+    );
+  }
   return (
     <View style={[StyleSheet.absoluteFill, styles.primerPlano]} pointerEvents="none">
       {cielo === 'nieve' ? <Nieve cantidad={12} /> : <Lluvia cantidad={cielo === 'tormenta' ? 24 : 16} rapida={cielo === 'tormenta'} />}
@@ -117,12 +125,12 @@ export function EfectoClima({ cielo, noche }: { cielo: Cielo; noche: boolean }) 
     case 'nieve':
       return <Nieve cantidad={40} />;
     case 'niebla':
-      return <Nubes cantidad={5} opacidad={0.09} />;
+      return <Nubes cantidad={7} opacidad={0.3} />;
     case 'nublado':
       return (
         <>
           {noche ? <Estrellas cantidad={18} /> : null}
-          <Nubes cantidad={4} opacidad={0.07} />
+          <Nubes cantidad={6} opacidad={noche ? 0.18 : 0.26} />
         </>
       );
     default:
@@ -270,50 +278,85 @@ function Sol() {
   );
 }
 
-function Nubes({ cantidad, opacidad }: { cantidad: number; opacidad: number }) {
+function Nubes({ cantidad, opacidad, lentas = false }: { cantidad: number; opacidad: number; lentas?: boolean }) {
   const nubes = useMemo(
     () =>
       Array.from({ length: cantidad }, (_, i) => ({
         id: i,
-        y: azar(0.02, 0.6),
-        escala: azar(0.7, 1.5),
-        duracion: azar(45000, 80000),
-        retraso: azar(0, 20000),
+        y: azar(-0.05, 0.75),
+        escala: azar(0.8, 1.7),
+        duracion: azar(lentas ? 70000 : 40000, lentas ? 110000 : 70000),
+        // Repartidas a lo ancho desde el inicio: no hay que esperar a que entren por la izquierda.
+        inicio: (i + Math.random() * 0.6) / cantidad,
+        opacidad: opacidad * azar(0.7, 1.15),
       })),
-    [cantidad],
+    [cantidad, opacidad, lentas],
   );
   return (
     <>
       {nubes.map((nube) => (
-        <Nube key={nube.id} {...nube} opacidad={opacidad} />
+        <Nube key={nube.id} {...nube} />
       ))}
     </>
   );
 }
 
-function Nube({ y, escala, duracion, retraso, opacidad }: { y: number; escala: number; duracion: number; retraso: number; opacidad: number }) {
+/** Bucle de 0 a 1 que empieza en `inicio` (para que cada nube arranque a media pantalla). */
+function useBucleDesde(duracion: number, inicio: number) {
+  const valor = useRef(new Animated.Value(inicio)).current;
+  useEffect(() => {
+    let detenido = false;
+    const vuelta = () => {
+      if (detenido) return;
+      valor.setValue(0);
+      Animated.timing(valor, { toValue: 1, duration: duracion, easing: Easing.linear, useNativeDriver: NATIVO }).start(
+        ({ finished }) => finished && vuelta(),
+      );
+    };
+    Animated.timing(valor, {
+      toValue: 1,
+      duration: duracion * (1 - inicio),
+      easing: Easing.linear,
+      useNativeDriver: NATIVO,
+    }).start(({ finished }) => finished && vuelta());
+    return () => {
+      detenido = true;
+      valor.stopAnimation();
+    };
+  }, [valor, duracion, inicio]);
+  return valor;
+}
+
+function Nube({ y, escala, duracion, inicio, opacidad }: { y: number; escala: number; duracion: number; inicio: number; opacidad: number }) {
   const { width, height } = useWindowDimensions();
-  const t = useBucle(duracion, { retraso });
-  const color = `rgba(255,255,255,${opacidad})`;
+  const t = useBucleDesde(duracion, inicio);
+  const mece = useBucle(azarFijo(y) * 3000 + 5000, { vaiven: true });
   return (
     <Animated.View
       style={[
         styles.nube,
+        // La opacidad va en el contenedor y las piezas son opacas: así la nube se ve pareja,
+        // sin manchas donde se enciman los círculos.
+        { top: y * height, opacity: opacidad },
+        Platform.OS === 'web' ? ({ filter: 'blur(10px)' } as object) : null,
         {
-          top: y * height,
           transform: [
-            { translateX: t.interpolate({ inputRange: [0, 1], outputRange: [-320, width + 40] }) },
+            { translateX: t.interpolate({ inputRange: [0, 1], outputRange: [-420 * escala, width + 60] }) },
+            { translateY: mece.interpolate({ inputRange: [0, 1], outputRange: [-8, 8] }) },
             { scale: escala },
           ],
         },
       ]}
     >
-      <View style={[styles.nubeBase, { backgroundColor: color }]} />
-      <View style={[styles.nubeBola, { width: 110, height: 110, left: 40, top: -50, backgroundColor: color }]} />
-      <View style={[styles.nubeBola, { width: 80, height: 80, left: 120, top: -30, backgroundColor: color }]} />
+      <View style={styles.nubeBase} />
+      <View style={[styles.nubeBola, { width: 140, height: 140, left: 50, top: -70 }]} />
+      <View style={[styles.nubeBola, { width: 110, height: 110, left: 150, top: -45 }]} />
+      <View style={[styles.nubeBola, { width: 90, height: 90, left: 0, top: -30 }]} />
     </Animated.View>
   );
 }
+
+const azarFijo = (semilla: number) => Math.abs(Math.sin(semilla * 9301 + 49297)) % 1;
 
 function Estrellas({ cantidad }: { cantidad: number }) {
   const estrellas = useMemo(
@@ -424,19 +467,21 @@ const styles = StyleSheet.create({
   nube: {
     position: 'absolute',
     left: 0,
-    width: 240,
-    height: 70,
+    width: 280,
+    height: 80,
   },
   nubeBase: {
     position: 'absolute',
     bottom: 0,
-    width: 240,
-    height: 70,
-    borderRadius: 35,
+    width: 280,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: '#E8F1FF',
   },
   nubeBola: {
     position: 'absolute',
     borderRadius: 999,
+    backgroundColor: '#E8F1FF',
   },
   estrella: {
     position: 'absolute',

@@ -109,6 +109,8 @@ sudo -u postgres psql -q -d UPP -f - < "$DESTINO/sql/03_usuarios.sql"
 ok "Tabla Usuarios lista (upp_api solo puede leer y crear cuentas)"
 sudo -u postgres psql -q -d UPP -f - < "$DESTINO/sql/04_bitacora.sql"
 ok "Tabla Bitacora lista (respaldo de los logs de la app)"
+sudo -u postgres psql -q -d UPP -f - < "$DESTINO/sql/05_2fa.sql"
+ok "Columna Secreto2FA lista (verificación en dos pasos con TOTP)"
 
 # ----------------------------------------------------------- 7. Configuración
 paso "Configuración (.env)"

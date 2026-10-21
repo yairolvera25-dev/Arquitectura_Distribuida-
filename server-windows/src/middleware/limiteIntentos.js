@@ -1,11 +1,13 @@
 // Frena los ataques de fuerza bruta al login: tras MAX_FALLOS intentos fallidos con el mismo
 // usuario desde la misma IP, se bloquea ese par durante BLOQUEO_MS. Vive en memoria.
+// Contraseñas y códigos TOTP cuentan juntos: el contador solo se limpia al entrar con los dos.
 const MAX_FALLOS = 5;
 const BLOQUEO_MS = 15 * 60 * 1000;
 
 const fallos = new Map(); // clave -> { cuenta, desde }
 
-const clave = (req) => `${req.ip}|${String(req.body?.usuario ?? '').trim().toLowerCase()}`;
+// En /2fa el usuario sale del token pendiente (`req.intentoDe`), no del cuerpo.
+const clave = (req) => `${req.ip}|${String(req.intentoDe ?? req.body?.usuario ?? '').trim().toLowerCase()}`;
 
 export function limitarIntentos(req, res, next) {
   const registro = fallos.get(clave(req));

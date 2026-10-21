@@ -6,9 +6,9 @@ Examen Parcial 1 de Seguridad Informática (Universidad Politécnica de Pachuca)
 
 | Componente | Estado |
 |---|---|
-| `client/` | Código listo; ya guarda registros reales en el servidor dos |
-| `server-windows/` | Instalado en `10.191.84.109:3000`, pero **le falta el inicio de sesión**: responde `404` en `/api/auth` (ver *Actualizar los servidores*) |
-| `server-linux/` | Instalado y al día en `10.191.84.219:3000`, con inicio de sesión y respaldo de bitácora |
+| `client/` | Código listo, con verificación en dos pasos (2FA con TOTP) |
+| `server-windows/` | Instalado en `10.191.84.109:3000`, pero **le falta el inicio de sesión y el 2FA**: responde `404` en `/api/auth` (ver *Actualizar los servidores*) |
+| `server-linux/` | Instalado en `10.191.84.219:3000`; **falta actualizarlo para el 2FA** (ver *Actualizar los servidores*) |
 | `docs/` | `pasos-cliente.md` y `probar-servidores.sh` listos; falta el reporte PDF |
 
 Falta para entregar: el **vídeo**, el **reporte PDF** y cerrar las dos bases de
@@ -61,6 +61,7 @@ Cada quien trabaja solo en su carpeta para evitar conflictos al hacer push.
 | Clima | Open-Meteo |
 | Reconocimiento de voz | `expo-speech-recognition` (`es-MX`) |
 | Confirmación por voz | `expo-speech` |
+| Verificación en dos pasos | TOTP (RFC 6238) con `node:crypto`, compatible con Google Authenticator y Microsoft Authenticator; QR con `qrcode` |
 | Inteligencia de Barbie | Gemini (`gemini-3.8-flash`, API REST `generateContent`) |
 | Servicio web (ambos servidores) | Node.js + Express |
 | BD Servidor 1 | SQL Server Express (`mssql`) |
@@ -176,6 +177,8 @@ npx expo-doctor       # revisa dependencias y configuración
 | "La API key de Gemini no es válida" / "Gemini rechazó la API key" | Revisa `EXPO_PUBLIC_GEMINI_API_KEY` y reinicia Expo |
 | "Gemini no tiene el modelo…" | Google retiró ese modelo: cambia `EXPO_PUBLIC_GEMINI_MODELO` por uno de https://ai.google.dev/gemini-api/docs/models |
 | "Se acabó la cuota gratis de Gemini" | Límite por minuto del plan gratuito; espera un poco. Mientras, "Barbie, guarda en el servidor uno" sigue funcionando |
+| "Código de verificación incorrecto" con el código bueno | El reloj del teléfono o de la VM está desfasado más de 30 s: activa la hora automática en el teléfono y sincroniza la VM |
+| "El servidor uno/dos no tiene vinculada tu app autenticadora" (en la bitácora) | Ese servidor estaba apagado cuando se vinculó la app; restablece la contraseña con el código de recuperación y vuelve a entrar con los dos encendidos |
 | La app no abre en Expo Go | Es lo esperado; usa `npx expo run:android` |
 | `SDK location not found` al compilar | Falta definir `ANDROID_HOME` |
 
@@ -299,15 +302,23 @@ Las cuentas viven en **los dos servidores** (tabla `Usuarios`), así que se pued
 | Ruta | Cuerpo | Respuesta |
 |---|---|---|
 | `POST /api/auth/registro` | `{ "usuario", "nombre", "paterno"?, "materno"?, "contrasena", "codigoRecuperacion"? }` | `201 { "usuario", "codigoRecuperacion" }` · `400` datos inválidos · `409` el usuario ya existe |
-| `POST /api/auth/login` | `{ "usuario", "contrasena" }` | `200 { "token", "usuario": {…} }` · `401` usuario o contraseña incorrectos · `429` demasiados intentos |
+| `POST /api/auth/login` | `{ "usuario", "contrasena" }` | `200 { "paso": "codigo" \| "configurar", "tokenPendiente", "secreto"?, "enlace"?, "qr"? }` · `401` usuario o contraseña incorrectos · `429` demasiados intentos |
+| `POST /api/auth/2fa` | `{ "tokenPendiente", "codigo", "secreto"? }` | `200 { "token", "usuario": {…} }` · `401` código incorrecto, vencido o ya usado (`"codigo": "TOTP"`, `"motivo"`) o token pendiente vencido (`"codigo": "PENDIENTE"`) · `409` el servidor no tiene vinculada la app · `429` demasiados intentos |
+| `POST /api/auth/salir` | — (con `Authorization`) | `200` el token deja de servir en ese servidor |
 | `POST /api/auth/restablecer` | `{ "usuario", "codigo", "contrasena" }` | `200` contraseña cambiada · `400` contraseña inválida · `401` usuario o código incorrectos · `429` demasiados intentos |
 | `GET /api/auth/yo` | — (con `Authorization`) | `200 { "usuario": {…} }` |
 
 - `usuario`: de 3 a 30 caracteres `a-z 0-9 . _ -`; se guarda en minúsculas.
 - `contrasena`: de 8 a 72 caracteres, con al menos una letra y un número. Se guarda como **hash scrypt** con sal aleatoria, nunca en texto.
+- **Verificación en dos pasos (2FA).** El login con la contraseña correcta **no** da la sesión: da un `tokenPendiente` (JWT de 10 minutos que solo sirve en `/api/auth/2fa`). La sesión se entrega hasta que llega el código de 6 dígitos de Google Authenticator o Microsoft Authenticator, validado en el servidor:
+  - `paso: "configurar"`: la cuenta todavía no vincula su app. El servidor genera un secreto de 160 bits y lo devuelve con su enlace `otpauth://` y el QR (PNG en data URI). La app manda ese mismo `secreto` a los dos servidores junto con el primer código, para que una sola entrada en el autenticador sirva en ambos. Solo se guarda si el código es correcto y la cuenta no tenía uno.
+  - `paso: "codigo"`: ya está vinculada; el secreto nunca vuelve a salir del servidor.
+  - Se acepta el código de ahora y el del periodo anterior o siguiente (±30 s, por si el reloj del teléfono no está exacto). Uno más viejo se rechaza como **vencido**, y un código que ya se usó no sirve dos veces.
+  - El secreto se guarda en `Usuarios.Secreto2FA` cifrado con AES-256-GCM, con una clave derivada (HKDF) del `TOKEN_SECRET` de ese servidor: quien copie la base de datos no puede generar códigos. Si se cambia el `TOKEN_SECRET`, hay que restablecer la contraseña para volver a vincular la app.
+  - Contraseñas y códigos fallidos cuentan juntos para el bloqueo de 15 minutos; el contador solo se limpia al entrar con los dos factores.
 - El token es un JWT HS256 que dura 12 horas, firmado con el `TOKEN_SECRET` de cada servidor. La app inicia sesión en los dos y guarda **un token por servidor**, así que no hace falta que el secreto coincida (aunque puede ser el mismo). Entra en cuanto el primero responde y agrega el otro token en segundo plano; si un servidor rechaza la sesión, solo se quita su token y la app sigue funcionando con el otro.
 - Si el usuario no existe o la contraseña está mal, el mensaje es el mismo, para no revelar qué usuarios existen. Tras **5 intentos fallidos** desde la misma IP, ese usuario se bloquea 15 minutos.
-- **Restablecer la contraseña:** al registrarse, el primer servidor genera un **código de recuperación** de 12 caracteres (p. ej. `K7QF-M2XP-9TRW`), que la app le pasa al segundo para que sea el mismo en ambos. Se devuelve en texto **una sola vez** para que la persona lo guarde, y se almacena con hash scrypt. Con usuario + código se pone una contraseña nueva en los dos servidores. Tiene el mismo límite de intentos que el login. `upp_api` solo puede hacer `UPDATE` de la columna `Contrasena`.
+- **Restablecer la contraseña:** al registrarse, el primer servidor genera un **código de recuperación** de 12 caracteres (p. ej. `K7QF-M2XP-9TRW`), que la app le pasa al segundo para que sea el mismo en ambos. Se devuelve en texto **una sola vez** para que la persona lo guarde, y se almacena con hash scrypt. Con usuario + código se pone una contraseña nueva en los dos servidores, y se **desvincula la app autenticadora** (por si se perdió el teléfono): se vuelve a vincular con un QR nuevo al entrar. Tiene el mismo límite de intentos que el login. `upp_api` solo puede hacer `UPDATE` de las columnas `Contrasena` y `Secreto2FA`.
 
 ### Registros del clima (`/api/clima`), con sesión iniciada
 
@@ -356,7 +367,7 @@ Cada servidor necesita un secreto para firmar las sesiones (`TOKEN_SECRET`, mín
 openssl rand -hex 32
 ```
 
-**Servidor dos (Ubuntu):** el instalador crea las tablas `Usuarios` y `Bitacora` y pide `TOKEN_SECRET` si falta en el `.env`.
+**Servidor dos (Ubuntu):** el instalador crea las tablas `Usuarios` y `Bitacora`, la columna `Secreto2FA` del 2FA, instala `qrcode` y pide `TOKEN_SECRET` si falta en el `.env`.
 
 ```bash
 cd <repo>/server-linux
@@ -366,16 +377,20 @@ sudo bash deploy/instalar.sh
 
 **Servidor uno (Windows):**
 
-1. En SSMS, conectado como administrador, ejecuta `server-windows\sql\03_usuarios.sql` y después `server-windows\sql\04_bitacora.sql`.
+1. En SSMS, conectado como administrador, ejecuta en orden `server-windows\sql\03_usuarios.sql`, `04_bitacora.sql` y `05_2fa.sql` (este último agrega la columna `Secreto2FA` para el 2FA).
 2. En PowerShell como Administrador, dentro de `server-windows`:
    ```powershell
    git pull
-   npm ci --omit=dev
+   npm ci --omit=dev   # instala también qrcode, que genera el QR del 2FA
    notepad .env      # agrega la línea TOKEN_SECRET=… (la misma que en el servidor dos)
    powershell -ExecutionPolicy Bypass -File deploy\instalar.ps1
    ```
 
 `instalar.ps1` no arranca si falta `TOKEN_SECRET`. Sin esa línea, el servicio tampoco inicia.
+
+Al actualizar, las sesiones abiertas antes del 2FA dejan de valer: hay que volver a entrar, y la primera vez cada cuenta vincula su app autenticadora con el QR.
+
+**El reloj de las VMs tiene que estar en hora** (el código TOTP depende de la hora). En Ubuntu: `timedatectl` debe decir `System clock synchronized: yes`; en Windows: `w32tm /resync`. Si van más de 30 s desfasadas, todos los códigos salen "incorrectos" o "vencidos".
 
 ## Comandos de voz
 
@@ -434,13 +449,15 @@ Las dos VMs están en computadoras distintas y el celular debe alcanzar ambas.
 - API key en el header `x-api-key`; las peticiones sin ella se rechazan con `401`.
 - Validación de datos en el servidor y consultas parametrizadas.
 - **Inicio de sesión** obligatorio para guardar y consultar: contraseñas con hash scrypt y sal, tokens JWT firmados que vencen a las 12 horas, mensaje de error único para usuario inexistente o contraseña incorrecta, y bloqueo de 15 minutos tras 5 intentos fallidos.
+- **Verificación en dos pasos (2FA)** con TOTP de 6 dígitos (Google Authenticator o Microsoft Authenticator), validada en cada servidor: sin el código no hay sesión. Secreto cifrado con AES-256-GCM en la base, códigos vencidos o reutilizados rechazados, y el token pendiente del primer paso no abre ninguna otra ruta.
+- **Cerrar sesión** revoca el token en cada servidor (`/api/auth/salir`), no solo lo borra de la app. La lista de revocados vive en memoria, así que se pierde si el servicio se reinicia.
 - Quién guarda cada registro sale del token, no del cuerpo de la petición: no se puede guardar a nombre de otro.
 - Usuario de BD `upp_api` con permisos mínimos (`INSERT` y `SELECT` sobre `Georreferencia`, `Usuarios` y `Bitacora`, más `UPDATE` solo de la columna `Usuarios.Contrasena` para restablecerla), nunca `sa` ni `postgres`. No puede borrar ni modificar registros, logs ni ningún otro dato de las cuentas.
 - Las peticiones con datos inválidos se rechazan con `400` antes de llegar a la BD.
 - En Ubuntu, el servicio corre con un usuario de sistema sin shell y con el endurecimiento de systemd (`NoNewPrivileges`, `ProtectSystem`).
 - **Pendiente:** hoy las dos bases de datos **sí** están expuestas a la red ZeroTier. Comprobado: PostgreSQL escucha en `0.0.0.0:5432` con `ufw` desactivado, y el `1433` de SQL Server acepta conexiones desde la red del equipo (regla heredada de la Actividad 2). Las dos deben quedar solo para `localhost` o para la red interna de cada VM antes de entregar.
 - Credenciales, API key y `TOKEN_SECRET` en `.env`, que no se sube al repo. `TOKEN_SECRET` vive solo en los servidores, nunca en la app.
-- Pendiente para el Parcial 2: verificación en dos pasos (2FA) sobre este inicio de sesión.
+- Limitación conocida del 2FA: la app autenticadora se vincula en el primer inicio de sesión, así que quien conozca la contraseña de una cuenta que todavía no la vinculó podría vincular la suya.
 - Limitación conocida: las variables `EXPO_PUBLIC_*` quedan dentro de la app, así que la API key del cliente se puede extraer del APK.
 
 ## Entregables

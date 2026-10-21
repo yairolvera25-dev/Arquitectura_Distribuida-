@@ -2,11 +2,20 @@ import { randomInt } from 'node:crypto';
 
 import { Router } from 'express';
 
-import { buscarUsuario, cambiarContrasena, crearUsuario, esUsuarioDuplicado } from '../db/usuarios.js';
+import { buscarUsuario, cambiarContrasena, crearUsuario, esUsuarioDuplicado, guardarSecreto2FA } from '../db/usuarios.js';
 import { anotarExito, anotarFallo, limitarIntentos } from '../middleware/limiteIntentos.js';
 import { exigirSesion } from '../middleware/sesion.js';
 import { cifrarContrasena, verificarContrasena } from '../seguridad/contrasenas.js';
-import { firmarToken } from '../seguridad/tokens.js';
+import { firmarToken, firmarTokenPendiente, revocarToken, verificarTokenPendiente } from '../seguridad/tokens.js';
+import {
+  cifrarSecreto,
+  datosParaVincular,
+  descifrarSecreto,
+  esSecretoValido,
+  generarSecreto,
+  marcarUsado,
+  verificarCodigo,
+} from '../seguridad/totp.js';
 
 const USUARIO_VALIDO = /^[a-z0-9._-]{3,30}$/;
 const texto = (valor) => (typeof valor === 'string' ? valor.trim() : '');
@@ -51,6 +60,22 @@ function validarCuenta(cuerpo) {
   };
 }
 
+const ERROR_TOTP = {
+  incorrecto: 'Código de verificación incorrecto.',
+  vencido: 'Ese código ya venció; escribe el que muestra ahora tu app autenticadora.',
+  usado: 'Ese código ya se usó; espera a que tu app muestre el siguiente.',
+};
+
+/** Exige el token que da el login cuando la contraseña es correcta, y deja el usuario en `req.intentoDe`. */
+function exigirPendiente(req, res, next) {
+  try {
+    req.intentoDe = verificarTokenPendiente(texto(req.body?.tokenPendiente));
+    next();
+  } catch {
+    res.status(401).json({ ok: false, codigo: 'PENDIENTE', error: 'Pasó mucho tiempo; vuelve a escribir tu usuario y contraseña.' });
+  }
+}
+
 export function rutasAuth(servidor) {
   const rutas = Router();
 
@@ -78,8 +103,10 @@ export function rutasAuth(servidor) {
     }
   });
 
-  // Iniciar sesión. El mensaje de error es el mismo si el usuario no existe o la contraseña
-  // está mal, para no revelar qué usuarios existen.
+  // Paso 1 de 2: usuario y contraseña. El mensaje de error es el mismo si el usuario no existe o
+  // la contraseña está mal, para no revelar qué usuarios existen. Si son correctos NO se entrega la
+  // sesión, solo un token pendiente para el paso 2 (código TOTP). Si la cuenta todavía no vincula
+  // su app autenticadora, también se manda un secreto nuevo con su QR.
   rutas.post('/login', limitarIntentos, async (req, res) => {
     const usuario = texto(req.body?.usuario).toLowerCase();
     const contrasena = typeof req.body?.contrasena === 'string' ? req.body.contrasena : '';
@@ -91,6 +118,65 @@ export function rutasAuth(servidor) {
       console.warn(`Inicio de sesión fallido para "${usuario}" desde ${req.ip}`);
       return res.status(401).json({ ok: false, error: 'Usuario o contraseña incorrectos.' });
     }
+    // El contador de fallos NO se limpia aquí: si no, quien sepa la contraseña podría probar
+    // códigos TOTP sin límite volviendo a entrar cada 4 intentos.
+    const tokenPendiente = firmarTokenPendiente(encontrado.usuario);
+    if (encontrado.secreto2fa) {
+      console.log(`Contraseña correcta: ${encontrado.usuario}; falta el código TOTP`);
+      return res.json({ ok: true, servidor, paso: 'codigo', tokenPendiente });
+    }
+    console.log(`Contraseña correcta: ${encontrado.usuario}; falta vincular la app autenticadora`);
+    const vincular = await datosParaVincular(encontrado.usuario, generarSecreto());
+    res.json({ ok: true, servidor, paso: 'configurar', tokenPendiente, ...vincular });
+  });
+
+  // Paso 2 de 2: el código de 6 dígitos de Google/Microsoft Authenticator. Solo aquí se entrega la
+  // sesión. Al vincular (cuenta sin secreto) llega también el secreto del QR que se escaneó: la app
+  // manda el mismo a los dos servidores, para que un solo código sirva en ambos.
+  rutas.post('/2fa', exigirPendiente, limitarIntentos, async (req, res) => {
+    const usuario = req.intentoDe;
+    const codigo = texto(req.body?.codigo).replace(/\s/g, '');
+    const encontrado = await buscarUsuario(usuario);
+    if (!encontrado) {
+      return res.status(401).json({ ok: false, codigo: 'PENDIENTE', error: 'Vuelve a escribir tu usuario y contraseña.' });
+    }
+
+    let secreto;
+    const vinculando = !encontrado.secreto2fa;
+    if (vinculando) {
+      secreto = texto(req.body?.secreto).toUpperCase();
+      if (!esSecretoValido(secreto)) {
+        return res.status(409).json({
+          ok: false,
+          codigo: 'SIN_2FA',
+          error: 'Este servidor no tiene vinculada tu app autenticadora; restablece tu contraseña para volver a vincularla.',
+        });
+      }
+    } else {
+      try {
+        secreto = descifrarSecreto(encontrado.secreto2fa);
+      } catch {
+        // Se cifró con otro TOKEN_SECRET o el valor está alterado.
+        console.error(`No se pudo descifrar el secreto TOTP de ${usuario}`);
+        return res.status(409).json({
+          ok: false,
+          codigo: 'SIN_2FA',
+          error: 'No se pudo leer tu verificación en dos pasos; restablece tu contraseña para volver a vincularla.',
+        });
+      }
+    }
+
+    const { estado, periodo } = verificarCodigo(secreto, codigo);
+    const motivo = estado !== 'valido' ? estado : marcarUsado(usuario, periodo) ? null : 'usado';
+    if (motivo) {
+      anotarFallo(req);
+      console.warn(`Código TOTP ${motivo} para "${usuario}" desde ${req.ip}`);
+      return res.status(401).json({ ok: false, codigo: 'TOTP', motivo, error: ERROR_TOTP[motivo] });
+    }
+    if (vinculando && !(await guardarSecreto2FA(usuario, cifrarSecreto(secreto)))) {
+      return res.status(409).json({ ok: false, error: 'La app autenticadora se acaba de vincular desde otro lado; vuelve a iniciar sesión.' });
+    }
+
     anotarExito(req);
     const publico = {
       usuario: encontrado.usuario,
@@ -98,12 +184,13 @@ export function rutasAuth(servidor) {
       paterno: encontrado.paterno,
       materno: encontrado.materno,
     };
-    console.log(`Sesión iniciada: ${publico.usuario}`);
+    console.log(`Sesión iniciada con 2FA: ${publico.usuario}${vinculando ? ' (app autenticadora vinculada)' : ''}`);
     res.json({ ok: true, servidor, token: firmarToken(publico), usuario: publico });
   });
 
   // Restablecer la contraseña con el código de recuperación que se dio al crear la cuenta.
   // Mismo mensaje si el usuario no existe o el código está mal, y mismo límite de intentos que el login.
+  // También desvincula la app autenticadora (por si se perdió el teléfono): se vuelve a vincular al entrar.
   rutas.post('/restablecer', limitarIntentos, async (req, res) => {
     const usuario = texto(req.body?.usuario).toLowerCase();
     const codigo = normalizarCodigo(req.body?.codigo);
@@ -127,6 +214,13 @@ export function rutasAuth(servidor) {
   // Quién soy (para comprobar que el token sigue siendo válido).
   rutas.get('/yo', exigirSesion, (req, res) => {
     res.json({ ok: true, servidor, usuario: req.usuario });
+  });
+
+  // Cerrar sesión: el token deja de servir en este servidor aunque todavía no venza.
+  rutas.post('/salir', exigirSesion, (req, res) => {
+    revocarToken(req.token);
+    console.log(`Sesión cerrada: ${req.usuario.usuario}`);
+    res.json({ ok: true, servidor });
   });
 
   return rutas;

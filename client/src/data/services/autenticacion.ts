@@ -1,6 +1,8 @@
 // Registro e inicio de sesión. Las cuentas viven en los DOS servidores (tabla Usuarios en
 // SQL Server y en PostgreSQL), así que se puede entrar aunque uno esté apagado. La app guarda
 // un token por servidor, así que funciona aunque cada uno firme con su propio TOKEN_SECRET.
+// Entrar tiene dos pasos (2FA): usuario y contraseña, y luego el código TOTP de 6 dígitos de
+// Google Authenticator o Microsoft Authenticator. Sin el segundo no hay sesión.
 
 import type { ServidorId } from '../../config';
 import { bitacora } from './bitacora';
@@ -82,7 +84,28 @@ export async function restablecerContrasena(usuario: string, codigo: string, con
   }
 }
 
-type RespuestaLogin = { token: string; usuario: UsuarioSesion };
+/** Paso 1 (usuario y contraseña correctos): todavía no hay sesión, falta el código TOTP. */
+type RespuestaLogin = {
+  paso: 'codigo' | 'configurar';
+  tokenPendiente: string;
+  // Solo con paso 'configurar': la cuenta todavía no vincula su app autenticadora.
+  secreto?: string;
+  enlace?: string;
+  qr?: string;
+};
+type RespuestaSesion = { token: string; usuario: UsuarioSesion };
+
+/** Inicio de sesión a la mitad: la contraseña ya es correcta y falta el código de 6 dígitos. */
+export type Verificacion = {
+  usuario: string;
+  /** 'codigo': ya tiene la app vinculada. 'configurar': primero hay que escanear el QR. */
+  paso: 'codigo' | 'configurar';
+  /** Al configurar: el QR (PNG en data URI), el enlace otpauth:// y la clave para escribirla a mano. */
+  vincular: { secreto: string; enlace: string; qr: string } | null;
+  contrasena: string;
+  /** Paso 1 en cada servidor, en el orden de SERVIDORES_IDS. */
+  intentos: Promise<RespuestaLogin>[];
+};
 
 /** La primera promesa que se cumple; si todas fallan, rechaza con la lista de errores. */
 function primeraQueFunciona<T>(promesas: Promise<T>[]): Promise<T> {
@@ -97,46 +120,112 @@ function primeraQueFunciona<T>(promesas: Promise<T>[]): Promise<T> {
   });
 }
 
-/**
- * Inicia sesión en los dos servidores, cada uno con SU token. Entra en cuanto el primero
- * responde bien (no espera a uno apagado); el token del otro se agrega cuando llegue.
- */
-export async function iniciarSesion(usuario: string, contrasena: string): Promise<UsuarioSesion> {
-  const login = (id: ServidorId) =>
-    pedirServidor(id, '/api/auth/login', { method: 'POST', body: JSON.stringify({ usuario, contrasena }) }) as Promise<RespuestaLogin>;
-  const intentos = SERVIDORES_IDS.map((id) => login(id).then((respuesta) => ({ id, ...respuesta })));
+const pedirLogin = (id: ServidorId, usuario: string, contrasena: string) =>
+  pedirServidor(id, '/api/auth/login', { method: 'POST', body: JSON.stringify({ usuario, contrasena }) }) as Promise<RespuestaLogin>;
 
+const pedirSesion = (id: ServidorId, tokenPendiente: string, codigo: string, secreto?: string) =>
+  pedirServidor(id, '/api/auth/2fa', {
+    method: 'POST',
+    body: JSON.stringify({ tokenPendiente, codigo, ...(secreto ? { secreto } : {}) }),
+  }) as Promise<RespuestaSesion>;
+
+/**
+ * Paso 1 de 2: usuario y contraseña en los dos servidores. Sigue en cuanto el primero responde bien
+ * (no espera a uno apagado). Todavía NO hay sesión: falta `verificarCodigo` con el código TOTP.
+ */
+export async function iniciarSesion(usuario: string, contrasena: string): Promise<Verificacion> {
+  const intentos = SERVIDORES_IDS.map((id) => pedirLogin(id, usuario, contrasena));
   let primero: RespuestaLogin & { id: ServidorId };
   try {
-    primero = await primeraQueFunciona(intentos);
+    primero = await primeraQueFunciona(intentos.map((intento, i) => intento.then((r) => ({ ...r, id: SERVIDORES_IDS[i] }))));
   } catch (errores) {
     throw errorPrincipal(errores as unknown[]);
   }
+  const { paso, secreto, enlace, qr } = primero;
+  bitacora.info(
+    'cuenta',
+    paso === 'configurar'
+      ? `Contraseña correcta; falta vincular la app autenticadora (servidor ${NUMERO[primero.id]})`
+      : `Contraseña correcta; falta el código de verificación (servidor ${NUMERO[primero.id]})`,
+  );
+  return {
+    usuario,
+    paso,
+    vincular: paso === 'configurar' && secreto && enlace && qr ? { secreto, enlace, qr } : null,
+    contrasena,
+    intentos,
+  };
+}
+
+/**
+ * Paso 2 de 2: el código de Google/Microsoft Authenticator. Cada servidor lo valida por su cuenta y
+ * entrega SU token; se entra con el primero que lo acepta y el otro se agrega en segundo plano.
+ * Al vincular, se manda a los dos el secreto del QR que se escaneó, para que el mismo código sirva en ambos.
+ */
+export async function verificarCodigo(verificacion: Verificacion, codigo: string): Promise<UsuarioSesion> {
+  const { usuario, contrasena, intentos } = verificacion;
+  const secreto = verificacion.vincular?.secreto;
+  const pasos = SERVIDORES_IDS.map((id, i) =>
+    intentos[i].then(({ tokenPendiente }) => pedirSesion(id, tokenPendiente, codigo, secreto)).then((r) => ({ ...r, id })),
+  );
+
+  let primero: RespuestaSesion & { id: ServidorId };
+  try {
+    primero = await primeraQueFunciona(pasos);
+  } catch (errores) {
+    // Un servidor que rechazó la contraseña en el paso 1 no explica por qué falló el código.
+    const erroresLogin = await Promise.all(intentos.map((intento) => intento.then(() => null, (e: unknown) => e)));
+    const delCodigo = (errores as unknown[]).filter((error) => !erroresLogin.includes(error));
+    throw errorPrincipal(delCodigo.length ? delCodigo : (errores as unknown[]));
+  }
   const datos = primero.usuario;
   guardarSesion({ usuario: datos, tokens: { [primero.id]: primero.token } });
-  bitacora.exito('cuenta', `Sesión iniciada: ${datos.usuario} (servidor ${NUMERO[primero.id]})`);
+  bitacora.exito('cuenta', `Sesión iniciada con verificación en dos pasos: ${datos.usuario} (servidor ${NUMERO[primero.id]})`);
 
   // Los demás servidores, en segundo plano.
   const sigueLaMismaSesion = () => leerSesion()?.usuario.usuario === datos.usuario;
   SERVIDORES_IDS.forEach((id, i) => {
     if (id === primero.id) return;
-    intentos[i].then(
+    pasos[i].then(
       ({ token }) => {
         if (!sigueLaMismaSesion()) return;
         cambiarToken(id, token);
         bitacora.exito('cuenta', `Sesión iniciada también en el servidor ${NUMERO[id]}`);
       },
       async (error) => {
-        if (status(error) !== 401) return; // Apagado o sin la función: se queda sin token de ese servidor
-        // No conoce la cuenta (estaba apagado al registrarse): se le crea con los mismos datos y se
-        // entra. Si ya la tiene con otra contraseña, responde 409 y no se toca.
+        if (status(error) === 409) {
+          bitacora.aviso('cuenta', `El servidor ${NUMERO[id]} no tiene vinculada tu app autenticadora`, {
+            detalle: 'Restablece tu contraseña con el código de recuperación para vincularla en los dos servidores.',
+          });
+          return;
+        }
+        const errorLogin = await intentos[i].then(
+          () => null,
+          (e: unknown) => e,
+        );
+        if (status(errorLogin) !== 401) return; // Apagado o sin la función: se queda sin token de ese servidor
+        // No conoce la cuenta (estaba apagado al registrarse): se le crea con los mismos datos. Si ya la
+        // tiene con otra contraseña, responde 409 y no se toca. La app autenticadora solo se le puede
+        // vincular si se acaba de escanear el QR (el secreto no se vuelve a mostrar después).
         try {
           await pedirServidor(id, '/api/auth/registro', { method: 'POST', body: JSON.stringify({ ...datos, contrasena }) });
           bitacora.exito('cuenta', `Cuenta copiada al servidor ${NUMERO[id]}`);
-          const { token } = await login(id);
-          if (sigueLaMismaSesion()) cambiarToken(id, token);
         } catch {
           bitacora.aviso('cuenta', `No se pudo copiar la cuenta al servidor ${NUMERO[id]}`);
+          return;
+        }
+        if (!secreto) {
+          bitacora.aviso('cuenta', `El servidor ${NUMERO[id]} quedó sin la verificación en dos pasos`, {
+            detalle: 'Restablece tu contraseña con el código de recuperación para vincularla en los dos servidores.',
+          });
+          return;
+        }
+        try {
+          const { tokenPendiente } = await pedirLogin(id, usuario, contrasena);
+          const { token } = await pedirSesion(id, tokenPendiente, codigo, secreto);
+          if (sigueLaMismaSesion()) cambiarToken(id, token);
+        } catch {
+          bitacora.aviso('cuenta', `No se pudo entrar al servidor ${NUMERO[id]} con la cuenta copiada`);
         }
       },
     );
@@ -144,7 +233,13 @@ export async function iniciarSesion(usuario: string, contrasena: string): Promis
   return datos;
 }
 
+/** Cierra la sesión en la app y en cada servidor, para que sus tokens dejen de servir. */
 export function cerrarSesion() {
+  const tokens = leerSesion()?.tokens ?? {};
+  // pedirServidor toma el token en cuanto se llama, antes de que guardarSesion(null) lo borre.
+  for (const id of Object.keys(tokens) as ServidorId[]) {
+    pedirServidor(id, '/api/auth/salir', { method: 'POST' }).catch(() => {});
+  }
   guardarSesion(null);
   bitacora.info('cuenta', 'Sesión cerrada');
 }

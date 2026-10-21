@@ -1,6 +1,6 @@
 import { verificarToken } from '../seguridad/tokens.js';
 
-/** Exige una sesión iniciada (header `Authorization: Bearer <token>`) y deja el usuario en `req.usuario`. */
+/** Exige una sesión iniciada (header `Authorization: Bearer <token>`) y deja el usuario en `req.usuario` (y el token en `req.token`). */
 export function exigirSesion(req, res, next) {
   const [tipo, token] = (req.get('authorization') ?? '').split(' ');
   if (tipo !== 'Bearer' || !token) {
@@ -8,6 +8,7 @@ export function exigirSesion(req, res, next) {
   }
   try {
     req.usuario = verificarToken(token);
+    req.token = token;
     next();
   } catch (error) {
     const expiro = error?.name === 'TokenExpiredError';

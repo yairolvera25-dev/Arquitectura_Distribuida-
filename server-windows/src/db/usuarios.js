@@ -1,6 +1,7 @@
 import { obtenerPool, sql } from './conexion.js';
 
 // Cuentas de la app. Contrasena y CodigoRecuperacion guardan hashes scrypt, nunca el valor.
+// Secreto2FA guarda el secreto TOTP cifrado con AES-256-GCM (NULL = falta vincular la app autenticadora).
 
 export async function crearUsuario({ usuario, nombre, paterno, materno, contrasena, codigoRecuperacion }) {
   const pool = await obtenerPool();
@@ -27,20 +28,32 @@ export async function buscarUsuario(usuario) {
     .input('usuario', sql.NVarChar(50), usuario)
     .query(`
       SELECT Usuario AS usuario, Nombre AS nombre, Paterno AS paterno, Materno AS materno,
-             Contrasena AS contrasena, CodigoRecuperacion AS codigoRecuperacion
+             Contrasena AS contrasena, CodigoRecuperacion AS codigoRecuperacion, Secreto2FA AS secreto2fa
         FROM dbo.Usuarios
        WHERE Usuario = @usuario
     `);
   return resultado.recordset[0] ?? null;
 }
 
+/** Cambia la contraseña y desvincula la app autenticadora (por si se perdió el teléfono). */
 export async function cambiarContrasena(usuario, contrasena) {
   const pool = await obtenerPool();
   await pool
     .request()
     .input('usuario', sql.NVarChar(50), usuario)
     .input('contrasena', sql.NVarChar(255), contrasena)
-    .query('UPDATE dbo.Usuarios SET Contrasena = @contrasena WHERE Usuario = @usuario');
+    .query('UPDATE dbo.Usuarios SET Contrasena = @contrasena, Secreto2FA = NULL WHERE Usuario = @usuario');
+}
+
+/** Vincula la app autenticadora; false si ya estaba vinculada (no se sobrescribe). */
+export async function guardarSecreto2FA(usuario, secretoCifrado) {
+  const pool = await obtenerPool();
+  const resultado = await pool
+    .request()
+    .input('usuario', sql.NVarChar(50), usuario)
+    .input('secreto', sql.NVarChar(255), secretoCifrado)
+    .query('UPDATE dbo.Usuarios SET Secreto2FA = @secreto WHERE Usuario = @usuario AND Secreto2FA IS NULL');
+  return resultado.rowsAffected[0] === 1;
 }
 
 /** El usuario ya existía (violación de la restricción UNIQUE: errores 2627 y 2601). */

@@ -3,7 +3,9 @@ import { StatusBar } from 'expo-status-bar';
 import { useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -14,7 +16,13 @@ import {
   type TextInputProps,
 } from 'react-native';
 
-import { iniciarSesion, registrar, restablecerContrasena } from '../data/services/autenticacion';
+import {
+  iniciarSesion,
+  registrar,
+  restablecerContrasena,
+  verificarCodigo,
+  type Verificacion,
+} from '../data/services/autenticacion';
 import { Aparecer } from './components/animaciones';
 import { Logo } from './components/BarraLateral';
 import { FondoAnimado } from './components/FondoAnimado';
@@ -27,7 +35,7 @@ const USUARIO_VALIDO = /^[a-z0-9._-]{3,30}$/;
 const SUBTITULO: Record<Modo, string> = {
   entrar: 'Inicia sesión para hablar con Barbie',
   registro: 'Crea tu cuenta en los dos servidores',
-  restablecer: 'Usa tu código de recuperación para poner una contraseña nueva',
+  restablecer: 'Usa tu código de recuperación para poner una contraseña nueva (después volverás a vincular tu app autenticadora)',
 };
 
 const BOTON: Record<Modo, string> = {
@@ -75,6 +83,8 @@ export default function PantallaAcceso() {
   const [aviso, setAviso] = useState('');
   // Código de recuperación recién creado: se muestra antes de entrar, para que lo guarden.
   const [codigoNuevo, setCodigoNuevo] = useState<string | null>(null);
+  // Contraseña ya correcta: falta el código TOTP (segundo factor).
+  const [verificacion, setVerificacion] = useState<Verificacion | null>(null);
   const contrasenaRef = useRef<TextInput>(null);
 
   const cambiar = (campo: keyof typeof campos) => (valor: string) => {
@@ -85,12 +95,11 @@ export default function PantallaAcceso() {
   const entrar = async () => {
     setEnviando(true);
     try {
-      // Al terminar, la app cambia sola al dashboard (escucha la sesión).
-      await iniciarSesion(normalizarUsuario(campos.usuario), campos.contrasena);
+      setVerificacion(await iniciarSesion(normalizarUsuario(campos.usuario), campos.contrasena));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo iniciar sesión.');
-      setEnviando(false);
     }
+    setEnviando(false);
   };
 
   const enviar = async () => {
@@ -123,11 +132,18 @@ export default function PantallaAcceso() {
       if (modo === 'restablecer') {
         await restablecerContrasena(usuario, campos.codigo, campos.contrasena);
       }
-      await iniciarSesion(usuario, campos.contrasena);
+      setVerificacion(await iniciarSesion(usuario, campos.contrasena));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo completar. Intenta de nuevo.');
-      setEnviando(false);
     }
+    setEnviando(false);
+  };
+
+  // Vuelve a pedir usuario y contraseña (cancelar, o el token pendiente ya venció).
+  const volverAlInicio = () => {
+    setVerificacion(null);
+    setCodigoNuevo(null);
+    cambiarModo('entrar');
   };
 
   const cambiarModo = (nuevo: Modo) => {
@@ -143,141 +159,263 @@ export default function PantallaAcceso() {
     </Pressable>
   );
 
+  if (verificacion) {
+    return (
+      <Marco>
+        <SegundoFactor verificacion={verificacion} onVolver={volverAlInicio} />
+      </Marco>
+    );
+  }
+
+  return (
+    <Marco>
+      <View style={styles.encabezado}>
+        <Logo horizontal />
+        <Text style={styles.titulo}>{codigoNuevo ? '¡Cuenta creada!' : 'Clima distribuido'}</Text>
+        <Text style={styles.subtitulo}>
+          {codigoNuevo ? 'Guarda tu código de recuperación antes de entrar' : SUBTITULO[modo]}
+        </Text>
+      </View>
+
+      {codigoNuevo ? (
+        <>
+          <View style={styles.codigoCaja}>
+            <Ionicons name="key-outline" size={20} color={colores.sol} />
+            <Text style={styles.codigo} selectable>
+              {codigoNuevo}
+            </Text>
+          </View>
+          <Text style={styles.ayudaCodigo}>
+            Anótalo o tómale captura y guárdalo en un lugar seguro. Es la única forma de restablecer tu
+            contraseña si la olvidas, y no se vuelve a mostrar.
+          </Text>
+          {aviso ? <Aviso texto={aviso} /> : null}
+          {error ? <CajaError texto={error} /> : null}
+          <Boton texto="Ya lo guardé, entrar" enviando={enviando} onPress={entrar} />
+        </>
+      ) : (
+        <>
+          {modo !== 'restablecer' ? (
+            <View style={styles.pestanas}>
+              <Pestana activa={modo === 'entrar'} texto="Iniciar sesión" onPress={() => cambiarModo('entrar')} />
+              <Pestana activa={modo === 'registro'} texto="Crear cuenta" onPress={() => cambiarModo('registro')} />
+            </View>
+          ) : (
+            <Pressable onPress={() => cambiarModo('entrar')} style={styles.volver}>
+              <Ionicons name="arrow-back" size={16} color={colores.primario} />
+              <Text style={styles.enlace}>Volver a iniciar sesión</Text>
+            </Pressable>
+          )}
+
+          {modo === 'registro' ? (
+            <>
+              <Campo icono="person-outline" placeholder="Nombre" value={campos.nombre} onChangeText={cambiar('nombre')} autoComplete="given-name" />
+              <View style={styles.fila}>
+                <Campo
+                  style={styles.flex}
+                  placeholder="Apellido paterno"
+                  value={campos.paterno}
+                  onChangeText={cambiar('paterno')}
+                  autoComplete="family-name"
+                />
+                <Campo style={styles.flex} placeholder="Apellido materno" value={campos.materno} onChangeText={cambiar('materno')} />
+              </View>
+            </>
+          ) : null}
+
+          <Campo
+            icono="at"
+            placeholder="Usuario"
+            value={campos.usuario}
+            onChangeText={cambiar('usuario')}
+            autoCapitalize="none"
+            autoCorrect={false}
+            autoComplete="off"
+              importantForAutofill="no"
+            returnKeyType="next"
+            onSubmitEditing={() => contrasenaRef.current?.focus()}
+          />
+
+          {modo === 'restablecer' ? (
+            <Campo
+              icono="key-outline"
+              placeholder="Código de recuperación (K7QF-M2XP-9TRW)"
+              value={campos.codigo}
+              onChangeText={cambiar('codigo')}
+              autoCapitalize="characters"
+              autoCorrect={false}
+            />
+          ) : null}
+
+          <Campo
+            ref={contrasenaRef}
+            icono="lock-closed-outline"
+            placeholder={modo === 'restablecer' ? 'Contraseña nueva' : 'Contraseña'}
+            value={campos.contrasena}
+            onChangeText={cambiar('contrasena')}
+            secureTextEntry={!verContrasena}
+            autoCapitalize="none"
+            autoComplete="off"
+              importantForAutofill="no"
+            onSubmitEditing={modo === 'entrar' ? enviar : undefined}
+            accion={ojo}
+          />
+          {modo !== 'entrar' ? (
+            <>
+              <Campo
+                icono="lock-closed-outline"
+                placeholder="Confirmar contraseña"
+                value={campos.confirmar}
+                onChangeText={cambiar('confirmar')}
+                secureTextEntry={!verContrasena}
+                autoCapitalize="none"
+                autoComplete="off"
+              importantForAutofill="no"
+                onSubmitEditing={enviar}
+              />
+              <Text style={styles.ayuda}>Mínimo 8 caracteres, con al menos una letra y un número.</Text>
+            </>
+          ) : null}
+
+          {error ? <CajaError texto={error} /> : null}
+
+          <Boton texto={BOTON[modo]} enviando={enviando} onPress={enviar} />
+
+          {modo === 'entrar' ? (
+            <Pressable onPress={() => cambiarModo('restablecer')} style={styles.olvide}>
+              <Text style={styles.enlace}>¿Olvidaste tu contraseña?</Text>
+            </Pressable>
+          ) : null}
+        </>
+      )}
+
+      <PieSeguridad />
+    </Marco>
+  );
+}
+
+/** Fondo y tarjeta de las pantallas de acceso. */
+function Marco({ children }: { children: React.ReactNode }) {
   return (
     <KeyboardAvoidingView style={styles.pantalla} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <StatusBar style="light" />
       <FondoAnimado cielo="despejado" noche />
       <ScrollView contentContainerStyle={styles.contenido} keyboardShouldPersistTaps="handled">
         <Aparecer>
-          <View style={styles.tarjeta}>
-            <View style={styles.encabezado}>
-              <Logo horizontal />
-              <Text style={styles.titulo}>{codigoNuevo ? '¡Cuenta creada!' : 'Clima distribuido'}</Text>
-              <Text style={styles.subtitulo}>
-                {codigoNuevo ? 'Guarda tu código de recuperación antes de entrar' : SUBTITULO[modo]}
-              </Text>
-            </View>
-
-            {codigoNuevo ? (
-              <>
-                <View style={styles.codigoCaja}>
-                  <Ionicons name="key-outline" size={20} color={colores.sol} />
-                  <Text style={styles.codigo} selectable>
-                    {codigoNuevo}
-                  </Text>
-                </View>
-                <Text style={styles.ayudaCodigo}>
-                  Anótalo o tómale captura y guárdalo en un lugar seguro. Es la única forma de restablecer tu
-                  contraseña si la olvidas, y no se vuelve a mostrar.
-                </Text>
-                {aviso ? <Aviso texto={aviso} /> : null}
-                {error ? <CajaError texto={error} /> : null}
-                <Boton texto="Ya lo guardé, entrar" enviando={enviando} onPress={entrar} />
-              </>
-            ) : (
-              <>
-                {modo !== 'restablecer' ? (
-                  <View style={styles.pestanas}>
-                    <Pestana activa={modo === 'entrar'} texto="Iniciar sesión" onPress={() => cambiarModo('entrar')} />
-                    <Pestana activa={modo === 'registro'} texto="Crear cuenta" onPress={() => cambiarModo('registro')} />
-                  </View>
-                ) : (
-                  <Pressable onPress={() => cambiarModo('entrar')} style={styles.volver}>
-                    <Ionicons name="arrow-back" size={16} color={colores.primario} />
-                    <Text style={styles.enlace}>Volver a iniciar sesión</Text>
-                  </Pressable>
-                )}
-
-                {modo === 'registro' ? (
-                  <>
-                    <Campo icono="person-outline" placeholder="Nombre" value={campos.nombre} onChangeText={cambiar('nombre')} autoComplete="given-name" />
-                    <View style={styles.fila}>
-                      <Campo
-                        style={styles.flex}
-                        placeholder="Apellido paterno"
-                        value={campos.paterno}
-                        onChangeText={cambiar('paterno')}
-                        autoComplete="family-name"
-                      />
-                      <Campo style={styles.flex} placeholder="Apellido materno" value={campos.materno} onChangeText={cambiar('materno')} />
-                    </View>
-                  </>
-                ) : null}
-
-                <Campo
-                  icono="at"
-                  placeholder="Usuario"
-                  value={campos.usuario}
-                  onChangeText={cambiar('usuario')}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  autoComplete="off"
-                    importantForAutofill="no"
-                  returnKeyType="next"
-                  onSubmitEditing={() => contrasenaRef.current?.focus()}
-                />
-
-                {modo === 'restablecer' ? (
-                  <Campo
-                    icono="key-outline"
-                    placeholder="Código de recuperación (K7QF-M2XP-9TRW)"
-                    value={campos.codigo}
-                    onChangeText={cambiar('codigo')}
-                    autoCapitalize="characters"
-                    autoCorrect={false}
-                  />
-                ) : null}
-
-                <Campo
-                  ref={contrasenaRef}
-                  icono="lock-closed-outline"
-                  placeholder={modo === 'restablecer' ? 'Contraseña nueva' : 'Contraseña'}
-                  value={campos.contrasena}
-                  onChangeText={cambiar('contrasena')}
-                  secureTextEntry={!verContrasena}
-                  autoCapitalize="none"
-                  autoComplete="off"
-                    importantForAutofill="no"
-                  onSubmitEditing={modo === 'entrar' ? enviar : undefined}
-                  accion={ojo}
-                />
-                {modo !== 'entrar' ? (
-                  <>
-                    <Campo
-                      icono="lock-closed-outline"
-                      placeholder="Confirmar contraseña"
-                      value={campos.confirmar}
-                      onChangeText={cambiar('confirmar')}
-                      secureTextEntry={!verContrasena}
-                      autoCapitalize="none"
-                      autoComplete="off"
-                    importantForAutofill="no"
-                      onSubmitEditing={enviar}
-                    />
-                    <Text style={styles.ayuda}>Mínimo 8 caracteres, con al menos una letra y un número.</Text>
-                  </>
-                ) : null}
-
-                {error ? <CajaError texto={error} /> : null}
-
-                <Boton texto={BOTON[modo]} enviando={enviando} onPress={enviar} />
-
-                {modo === 'entrar' ? (
-                  <Pressable onPress={() => cambiarModo('restablecer')} style={styles.olvide}>
-                    <Text style={styles.enlace}>¿Olvidaste tu contraseña?</Text>
-                  </Pressable>
-                ) : null}
-              </>
-            )}
-
-            <View style={styles.pie}>
-              <Ionicons name="shield-checkmark-outline" size={14} color={colores.textoTenue} />
-              <Text style={styles.pieTexto}>Tu contraseña se guarda cifrada en el servidor uno y en el servidor dos.</Text>
-            </View>
-          </View>
+          <View style={styles.tarjeta}>{children}</View>
         </Aparecer>
       </ScrollView>
     </KeyboardAvoidingView>
+  );
+}
+
+function PieSeguridad() {
+  return (
+    <View style={styles.pie}>
+      <Ionicons name="shield-checkmark-outline" size={14} color={colores.textoTenue} />
+      <Text style={styles.pieTexto}>
+        Verificación en dos pasos: contraseña cifrada y código TOTP, comprobados en el servidor uno y en el servidor dos.
+      </Text>
+    </View>
+  );
+}
+
+const agruparClave = (secreto: string) => secreto.match(/.{1,4}/g)?.join(' ') ?? secreto;
+
+/**
+ * Segundo factor: el código de 6 dígitos de Google Authenticator o Microsoft Authenticator. Si la
+ * cuenta todavía no vincula su app, primero muestra el QR (o la clave para escribirla a mano).
+ */
+function SegundoFactor({ verificacion, onVolver }: { verificacion: Verificacion; onVolver: () => void }) {
+  const [codigo, setCodigo] = useState('');
+  const [enviando, setEnviando] = useState(false);
+  const [error, setError] = useState('');
+  const { vincular } = verificacion;
+
+  const verificar = async (valor: string) => {
+    if (!/^\d{6}$/.test(valor)) {
+      setError('Escribe los 6 dígitos que muestra tu app autenticadora.');
+      return;
+    }
+    setEnviando(true);
+    setError('');
+    try {
+      // Al terminar, la app cambia sola al dashboard (escucha la sesión).
+      await verificarCodigo(verificacion, valor);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo verificar el código.');
+      setCodigo('');
+      setEnviando(false);
+    }
+  };
+
+  const cambiarCodigo = (valor: string) => {
+    const digitos = valor.replace(/\D/g, '').slice(0, 6);
+    setCodigo(digitos);
+    setError('');
+    if (digitos.length === 6 && !enviando) verificar(digitos);
+  };
+
+  return (
+    <>
+      <View style={styles.encabezado}>
+        <Ionicons name={vincular ? 'qr-code-outline' : 'shield-checkmark-outline'} size={40} color={colores.primario} />
+        <Text style={styles.titulo}>{vincular ? 'Vincula tu app autenticadora' : 'Verificación en dos pasos'}</Text>
+        <Text style={styles.subtitulo}>
+          {vincular
+            ? 'Solo se hace una vez. Usa Google Authenticator o Microsoft Authenticator.'
+            : `Escribe el código de 6 dígitos de "Clima UPP" (${verificacion.usuario}) en tu app autenticadora.`}
+        </Text>
+      </View>
+
+      {vincular ? (
+        <>
+          <Text style={styles.ayudaCodigo}>1. En la app toca "+" y elige escanear un código QR:</Text>
+          <View style={styles.qrCaja}>
+            <Image source={{ uri: vincular.qr }} style={styles.qr} accessibilityLabel="Código QR para la app autenticadora" />
+          </View>
+          {Platform.OS !== 'web' ? (
+            <Pressable onPress={() => Linking.openURL(vincular.enlace).catch(() => setError('No encontré una app autenticadora instalada; escribe la clave a mano.'))} style={styles.botonSecundario}>
+              <Ionicons name="open-outline" size={16} color={colores.primario} />
+              <Text style={styles.enlace}>¿Estás en este mismo teléfono? Abrir en la app autenticadora</Text>
+            </Pressable>
+          ) : null}
+          <Text style={styles.ayudaCodigo}>¿No puedes escanearlo? Agrega la cuenta con esta clave:</Text>
+          <Text style={styles.clave} selectable>
+            {agruparClave(vincular.secreto)}
+          </Text>
+          <Text style={styles.ayudaCodigo}>2. Escribe el código que te muestra la app:</Text>
+        </>
+      ) : null}
+
+      <TextInput
+        style={styles.entradaCodigo}
+        value={codigo}
+        onChangeText={cambiarCodigo}
+        placeholder="000000"
+        placeholderTextColor={colores.textoTenue}
+        keyboardType="number-pad"
+        textContentType="oneTimeCode"
+        autoComplete="off"
+        importantForAutofill="no"
+        maxLength={6}
+        autoFocus={!vincular}
+        editable={!enviando}
+        onSubmitEditing={() => verificar(codigo)}
+        accessibilityLabel="Código de verificación de 6 dígitos"
+      />
+      <Text style={styles.ayuda}>El código cambia cada 30 segundos y solo sirve una vez.</Text>
+
+      {error ? <CajaError texto={error} /> : null}
+
+      <Boton texto="Verificar y entrar" enviando={enviando} onPress={() => verificar(codigo)} />
+
+      <Pressable onPress={onVolver} style={styles.olvide}>
+        <Text style={styles.enlace}>Cancelar y volver a iniciar sesión</Text>
+      </Pressable>
+
+      <PieSeguridad />
+    </>
   );
 }
 
@@ -482,6 +620,47 @@ const styles = StyleSheet.create({
   },
   olvide: {
     alignSelf: 'center',
+  },
+  qrCaja: {
+    alignSelf: 'center',
+    padding: espacio.sm,
+    borderRadius: radio.sm,
+    backgroundColor: '#ffffff',
+  },
+  qr: {
+    width: 200,
+    height: 200,
+  },
+  clave: {
+    fontSize: 15,
+    fontWeight: '600',
+    letterSpacing: 1,
+    color: colores.texto,
+    textAlign: 'center',
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+  },
+  botonSecundario: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: espacio.sm,
+    borderRadius: radio.sm,
+    borderWidth: 1,
+    borderColor: colores.borde,
+  },
+  entradaCodigo: {
+    backgroundColor: colores.tarjetaAlta,
+    borderRadius: radio.sm,
+    borderWidth: 1,
+    borderColor: colores.borde,
+    paddingVertical: 14,
+    fontSize: 28,
+    fontWeight: '700',
+    letterSpacing: 10,
+    textAlign: 'center',
+    color: colores.texto,
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
   },
   enlace: {
     fontSize: 13,

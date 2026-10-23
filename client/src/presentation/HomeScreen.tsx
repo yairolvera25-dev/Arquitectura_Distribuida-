@@ -13,6 +13,7 @@ import { consultarBitacora, respaldarBitacora } from '../data/services/respaldo'
 import { consultarRegistros, guardarClima, type DatoClima } from '../data/services/servidores';
 import { ChipEstado, DETALLE_SERVIDOR, ListaServidores, PanelAsistente, type EstadoServidor } from './components/Asistente';
 import { BarraLateral, Logo } from './components/BarraLateral';
+import { PanelCifrado } from './components/Cifrado';
 import { Destacados, PronosticoSemana, TarjetaActual } from './components/Clima';
 import { Aparecer } from './components/animaciones';
 import { cieloDe, esDeNoche, FondoAnimado, PrimerPlanoClima } from './components/FondoAnimado';
@@ -39,6 +40,8 @@ export default function HomeScreen() {
   const [cargando, setCargando] = useState(true);
   const [errorClima, setErrorClima] = useState('');
   const [servidores, setServidores] = useState<Partial<Record<ServidorId, EstadoServidor>>>({});
+  // Sube con cada guardado para que el panel de cifrado vuelva a consultar.
+  const [guardados, setGuardados] = useState(0);
   // Ciudad elegida ("Barbie, ¿cuál es el clima en Londres?"); null = ubicación real del GPS.
   const [lugarElegido, setLugarElegido] = useState<LugarElegido | null>(null);
   const lugarRef = useRef<LugarElegido | null>(null);
@@ -121,6 +124,7 @@ export default function HomeScreen() {
       try {
         const guardado = await guardarClima(servidor, clima, datos);
         setServidores((previo) => ({ ...previo, [servidor]: { ok: true, detalle: `Guardado ${hora()}` } }));
+        setGuardados((n) => n + 1);
         return guardado;
       } catch (error) {
         setServidores((previo) => ({ ...previo, [servidor]: { ok: false, detalle: 'Error' } }));
@@ -173,6 +177,7 @@ export default function HomeScreen() {
       onGuardar={voz.guardar}
     />
   );
+  const cifrado = <PanelCifrado usuario={usuario?.usuario} version={guardados} />;
   const actual = (
     <TarjetaActual
       clima={clima}
@@ -218,6 +223,7 @@ export default function HomeScreen() {
               <View style={[styles.flex, styles.columna]}>
                 <Aparecer retraso={320}>{asistente}</Aparecer>
                 <Aparecer retraso={420}>{listaServidores}</Aparecer>
+                <Aparecer retraso={470}>{cifrado}</Aparecer>
                 <Aparecer retraso={520}>
                   <PanelRegistro />
                 </Aparecer>
@@ -248,6 +254,7 @@ export default function HomeScreen() {
       <Aparecer>{actual}</Aparecer>
       <Aparecer retraso={100}>{asistente}</Aparecer>
       <Aparecer retraso={200}>{listaServidores}</Aparecer>
+      <Aparecer retraso={250}>{cifrado}</Aparecer>
       <Aparecer retraso={300}>
         <Destacados clima={clima} pronostico={pronostico} />
       </Aparecer>

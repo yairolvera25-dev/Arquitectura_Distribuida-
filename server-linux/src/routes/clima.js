@@ -7,6 +7,7 @@ const FECHA = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
  * Filtros opcionales de GET /api/clima: ?usuario=…&lugar=…&desde=AAAA-MM-DD&hasta=AAAA-MM-DD&limite=…
+ * Con &cifrado=1 cada registro trae también su valor cifrado tal como está en la BD.
  * Devuelve el texto del error si alguno es inválido.
  */
 function leerFiltros(query) {
@@ -17,6 +18,7 @@ function leerFiltros(query) {
     lugar: texto(query.lugar) || null,
     desde: texto(query.desde) || null,
     hasta: texto(query.hasta) || null,
+    conCifrado: query.cifrado === '1',
   };
   if (filtros.usuario && filtros.usuario.length > 50) return '"usuario" admite máximo 50 caracteres.';
   if (filtros.lugar && filtros.lugar.length > 80) return '"lugar" admite máximo 80 caracteres.';

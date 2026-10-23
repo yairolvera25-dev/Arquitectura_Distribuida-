@@ -32,6 +32,12 @@ export type RegistroGuardado = {
   humedad: number | null;
   viento: number | null;
   fechaHora: string;
+  /** true si en la BD estaba cifrado; false si es anterior al cifrado (texto plano). */
+  protegido?: boolean;
+  /** El cifrado no cuadró al descifrar: alguien lo alteró o se cifró con otra clave. */
+  alterado?: boolean;
+  /** Valor de la columna Cifrado tal como está en la BD (solo con `consultarCifrado`). */
+  cifrado?: string | null;
 };
 
 /** Error de un servidor; `status` es el código HTTP, o null si no hubo respuesta. */
@@ -163,4 +169,19 @@ export async function consultarRegistros(
     .join('&');
   const { total, registros } = await pedirServidor(servidorId, `/api/clima?${parametros}`);
   return { total: total ?? null, registros };
+}
+
+/**
+ * Últimos registros de un usuario con su valor cifrado tal como está en la BD, junto con los
+ * datos ya descifrados por el servidor. Es para mostrar el cifrado en la app; Barbie usa
+ * `consultarRegistros`, que no trae el texto cifrado.
+ */
+export async function consultarCifrado(
+  servidorId: ServidorId,
+  usuario: string,
+  limite: number,
+): Promise<RegistroGuardado[]> {
+  const ruta = `/api/clima?limite=${limite}&usuario=${encodeURIComponent(usuario)}&cifrado=1`;
+  const { registros } = await pedirServidor(servidorId, ruta);
+  return registros;
 }

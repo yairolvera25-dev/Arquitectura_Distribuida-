@@ -363,7 +363,7 @@ Además de `x-api-key`, llevan el header `Authorization: Bearer <token>`. Sin é
 
 Los datos del clima (de `estado` a `viento`) se guardan cifrados en la columna `Cifrado`: con AES-256-GCM en Windows y con AES + RSA en Linux (ver [`docs/actividad2-cifrado.md`](docs/actividad2-cifrado.md)). La app los manda y los recibe en claro.
 
-`GET /api/clima?limite=50&usuario=haideni&lugar=pachuca&desde=2026-10-01&hasta=2026-10-05`: todos los filtros son opcionales. `lugar` busca en municipio o estado, y las fechas son `AAAA-MM-DD`, incluidas. Responde `{ "ok": true, "servidor": "linux", "total": 12, "registros": [ … ] }`, donde `total` cuenta los que cumplen los filtros. Cada registro trae `"protegido": true` si estaba cifrado en la BD, o `false` si es anterior al cifrado. Si el cifrado fue alterado, el registro llega con `"alterado": true` y los datos del clima en `null`.
+`GET /api/clima?limite=50&usuario=haideni&lugar=pachuca&desde=2026-10-01&hasta=2026-10-05`: todos los filtros son opcionales. `lugar` busca en municipio o estado, y las fechas son `AAAA-MM-DD`, incluidas. Responde `{ "ok": true, "servidor": "linux", "total": 12, "registros": [ … ] }`, donde `total` cuenta los que cumplen los filtros. Cada registro trae `"protegido": true` si estaba cifrado en la BD, o `false` si es anterior al cifrado. Si el cifrado fue alterado, el registro llega con `"alterado": true` y los datos del clima en `null`. Con `&cifrado=1`, cada registro trae además `cifrado`, el valor tal como está en la BD; lo usa el panel *Cifrado en los servidores* de la app.
 
 | Código | Cuándo |
 |---|---|

@@ -25,21 +25,25 @@ export async function insertarRegistro(r) {
   return resultado.recordset[0];
 }
 
-/** Fila de la BD → registro en claro. Si el cifrado no cuadra (alterado u otra clave) lo marca. */
-function abrirRegistro({ cifrado, ...fila }) {
-  if (!cifrado) return { ...fila, protegido: false };
+/**
+ * Fila de la BD → registro en claro. Si el cifrado no cuadra (alterado u otra clave) lo marca.
+ * Con `conCifrado` también devuelve el valor tal como está en la BD (para mostrarlo en la app).
+ */
+function abrirRegistro({ cifrado, ...fila }, conCifrado) {
+  const extra = conCifrado ? { cifrado } : {};
+  if (!cifrado) return { ...fila, ...extra, protegido: false };
   try {
-    return { ...fila, ...descifrar(cifrado), protegido: true };
+    return { ...fila, ...descifrar(cifrado), ...extra, protegido: true };
   } catch (error) {
     console.error(`Registro ${fila.id}: no se pudo descifrar (${error.message})`);
-    return { ...fila, protegido: true, alterado: true };
+    return { ...fila, ...extra, protegido: true, alterado: true };
   }
 }
 
 const contiene = (texto, buscado) => typeof texto === 'string' && texto.toLowerCase().includes(buscado);
 
 /** Últimos registros que cumplen los filtros y cuántos hay en total con esos filtros. */
-export async function listarRegistros({ limite, usuario, lugar, desde, hasta }) {
+export async function listarRegistros({ limite, usuario, lugar, desde, hasta, conCifrado }) {
   const pool = await obtenerPool();
   const condiciones = [];
   // Cada consulta necesita su propio request con los mismos parámetros.
@@ -75,7 +79,7 @@ export async function listarRegistros({ limite, usuario, lugar, desde, hasta }) 
   if (lugar) {
     const buscado = lugar.toLowerCase();
     const encontrados = (await consulta(false)).recordset
-      .map(abrirRegistro)
+      .map((fila) => abrirRegistro(fila, conCifrado))
       .filter((r) => contiene(r.municipio, buscado) || contiene(r.estado, buscado));
     return { registros: encontrados.slice(0, limite), total: encontrados.length };
   }
@@ -84,5 +88,5 @@ export async function listarRegistros({ limite, usuario, lugar, desde, hasta }) 
     consulta(true),
     conFiltros().query(`SELECT COUNT(*) AS total FROM dbo.Georreferencia ${donde}`),
   ]);
-  return { registros: resultado.recordset.map(abrirRegistro), total: conteo.recordset[0].total };
+  return { registros: resultado.recordset.map((fila) => abrirRegistro(fila, conCifrado)), total: conteo.recordset[0].total };
 }

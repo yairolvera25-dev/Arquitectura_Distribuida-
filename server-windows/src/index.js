@@ -8,6 +8,7 @@ import { exigirSesion } from './middleware/sesion.js';
 import { rutasAuth } from './routes/auth.js';
 import { rutasBitacora } from './routes/bitacora.js';
 import { rutasClima } from './routes/clima.js';
+import { cargarClave } from './seguridad/cifradoAes.js';
 
 const SERVIDOR = 'windows';
 const PUERTO = Number(process.env.PORT ?? 3000);
@@ -20,6 +21,14 @@ if (!process.env.API_KEY || process.env.API_KEY.length < 16) {
 // Firma los tokens de sesión. Debe ser la MISMA en los dos servidores.
 if (!process.env.TOKEN_SECRET || process.env.TOKEN_SECRET.length < 32) {
   console.error('Falta TOKEN_SECRET en el archivo .env (mínimo 32 caracteres, igual en los dos servidores).');
+  process.exit(1);
+}
+
+// Clave AES-256 de los registros del clima (32 bytes en Base64). Sin ella no se puede leer lo guardado.
+try {
+  cargarClave(process.env.CLAVE_AES);
+} catch (error) {
+  console.error(`${error.message} Genérala una sola vez con practicas-python/generar_clave_aes.py.`);
   process.exit(1);
 }
 

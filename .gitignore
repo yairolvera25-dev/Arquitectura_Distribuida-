@@ -11,3 +11,9 @@ ios/
 CLAUDE.md
 CLAUDE.local.md
 AGENTS.md
+
+# Python
+.venv/
+__pycache__/
+claves/
+*.pem

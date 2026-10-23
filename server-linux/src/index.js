@@ -8,6 +8,7 @@ import { exigirSesion } from './middleware/sesion.js';
 import { rutasAuth } from './routes/auth.js';
 import { rutasBitacora } from './routes/bitacora.js';
 import { rutasClima } from './routes/clima.js';
+import { cargarClaves } from './seguridad/cifradoRsa.js';
 
 const SERVIDOR = 'linux';
 const PUERTO = Number(process.env.PORT ?? 3000);
@@ -20,6 +21,15 @@ if (!process.env.API_KEY || process.env.API_KEY.length < 16) {
 // Firma los tokens de sesión. Debe ser la MISMA en los dos servidores.
 if (!process.env.TOKEN_SECRET || process.env.TOKEN_SECRET.length < 32) {
   console.error('Falta TOKEN_SECRET en el archivo .env (mínimo 32 caracteres, igual en los dos servidores).');
+  process.exit(1);
+}
+
+// Par de claves RSA de los registros del clima: la pública cifra y la privada descifra.
+try {
+  const bits = cargarClaves(process.env.RSA_CLAVE_PRIVADA || 'claves/privada.pem');
+  console.log(`Clave RSA de ${bits} bits cargada.`);
+} catch (error) {
+  console.error(`No se pudo leer la clave privada RSA (RSA_CLAVE_PRIVADA): ${error.message}`);
   process.exit(1);
 }
 

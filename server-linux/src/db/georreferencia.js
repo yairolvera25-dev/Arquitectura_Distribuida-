@@ -1,30 +1,35 @@
+import { cifrar, descifrar } from '../seguridad/cifradoRsa.js';
 import { pool } from './conexion.js';
 
 // Consultas parametrizadas ($1, $2…): los datos nunca se concatenan al SQL.
 
+// Datos del clima que se guardan cifrados (AES + RSA) en la columna "Cifrado". Sus columnas en texto
+// ("Estado", "Municipio", "Latitud"…) quedan en NULL; solo se llenan en los registros anteriores al cifrado.
+const PROTEGIDOS = ['estado', 'municipio', 'latitud', 'longitud', 'temperatura', 'humedad', 'viento'];
+
 export async function insertarRegistro(r) {
+  const protegidos = Object.fromEntries(PROTEGIDOS.map((campo) => [campo, r[campo] ?? null]));
   const { rows } = await pool.query(
-    `INSERT INTO "Georreferencia"
-       ("Usuario", "Nombre", "Paterno", "Materno", "Estado", "Municipio",
-        "Latitud", "Longitud", "Temperatura", "Humedad", "Viento")
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    `INSERT INTO "Georreferencia" ("Usuario", "Nombre", "Paterno", "Materno", "Cifrado")
+     VALUES ($1, $2, $3, $4, $5)
      RETURNING "Id" AS id, "FechaHora" AS "fechaHora"`,
-    [
-      r.usuario,
-      r.nombre,
-      r.paterno,
-      r.materno,
-      r.estado,
-      r.municipio,
-      r.latitud,
-      r.longitud,
-      r.temperatura,
-      r.humedad,
-      r.viento,
-    ],
+    [r.usuario, r.nombre, r.paterno, r.materno, cifrar(protegidos)],
   );
   return rows[0];
 }
+
+/** Fila de la BD → registro en claro. Si el cifrado no cuadra (alterado u otra clave) lo marca. */
+function abrirRegistro({ cifrado, ...fila }) {
+  if (!cifrado) return { ...fila, protegido: false };
+  try {
+    return { ...fila, ...descifrar(cifrado), protegido: true };
+  } catch (error) {
+    console.error(`Registro ${fila.id}: no se pudo descifrar (${error.message})`);
+    return { ...fila, protegido: true, alterado: true };
+  }
+}
+
+const contiene = (texto, buscado) => typeof texto === 'string' && texto.toLowerCase().includes(buscado);
 
 /** Últimos registros que cumplen los filtros y cuántos hay en total con esos filtros. */
 export async function listarRegistros({ limite, usuario, lugar, desde, hasta }) {
@@ -35,24 +40,36 @@ export async function listarRegistros({ limite, usuario, lugar, desde, hasta }) 
     condiciones.push(sql.replaceAll('?', `$${valores.length}`));
   };
   if (usuario) agregar('lower("Usuario") = ?', usuario);
-  if (lugar) agregar('("Municipio" ILIKE ? OR "Estado" ILIKE ?)', `%${lugar}%`);
   if (desde) agregar('"FechaHora" >= ?::date', desde);
   if (hasta) agregar('"FechaHora" < ?::date + 1', hasta);
   const donde = condiciones.length ? `WHERE ${condiciones.join(' AND ')}` : '';
 
-  const [{ rows }, conteo] = await Promise.all([
+  // "Municipio" y "Estado" van cifrados: PostgreSQL no puede buscar en ellos con ILIKE. Con filtro
+  // de lugar se descifran los registros que pasan los demás filtros y se busca aquí.
+  const consulta = (tope) =>
     pool.query(
       `SELECT "Id" AS id, "Usuario" AS usuario, "Nombre" AS nombre, "Paterno" AS paterno,
               "Materno" AS materno, "Estado" AS estado, "Municipio" AS municipio,
               "Latitud" AS latitud, "Longitud" AS longitud, "Temperatura" AS temperatura,
-              "Humedad" AS humedad, "Viento" AS viento, "FechaHora" AS "fechaHora"
+              "Humedad" AS humedad, "Viento" AS viento, "FechaHora" AS "fechaHora", "Cifrado" AS cifrado
          FROM "Georreferencia"
          ${donde}
         ORDER BY "Id" DESC
-        LIMIT $${valores.length + 1}`,
-      [...valores, limite],
-    ),
+        ${tope ? `LIMIT $${valores.length + 1}` : ''}`,
+      tope ? [...valores, limite] : valores,
+    );
+
+  if (lugar) {
+    const buscado = lugar.toLowerCase();
+    const encontrados = (await consulta(false)).rows
+      .map(abrirRegistro)
+      .filter((r) => contiene(r.municipio, buscado) || contiene(r.estado, buscado));
+    return { registros: encontrados.slice(0, limite), total: encontrados.length };
+  }
+
+  const [{ rows }, conteo] = await Promise.all([
+    consulta(true),
     pool.query(`SELECT COUNT(*)::int AS total FROM "Georreferencia" ${donde}`, valores),
   ]);
-  return { registros: rows, total: conteo.rows[0].total };
+  return { registros: rows.map(abrirRegistro), total: conteo.rows[0].total };
 }

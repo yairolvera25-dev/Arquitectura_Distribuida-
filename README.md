@@ -10,6 +10,7 @@ Examen Parcial 1 de Seguridad Informática (Universidad Politécnica de Pachuca)
 | `server-windows/` | Instalado en `10.191.84.109:3000`, con inicio de sesión y 2FA. Comprobado el 22 de octubre de 2026: registro (`201`), login y `/api/auth/2fa` (`200`) desde la app |
 | `server-linux/` | Instalado en `10.191.84.219:3000`; **falta actualizarlo para el 2FA** (ver *Actualizar los servidores*) |
 | `docs/` | `pasos-cliente.md` y `probar-servidores.sh` listos; falta el reporte PDF |
+| Actividad 2, Parcial 2 (Ruta A) | Cifrado AES (Windows) y AES + RSA (Linux) en el código, probado con una BD simulada y entre Node y Python. **Falta instalarlo en las dos VMs** (ver [`docs/actividad2-cifrado.md`](docs/actividad2-cifrado.md)) |
 
 Falta para entregar: el **vídeo**, el **reporte PDF** y cerrar las dos bases de
 datos, que hoy siguen expuestas a la red del equipo (ver **Seguridad**).
@@ -61,6 +62,7 @@ Cada quien trabaja solo en su carpeta para evitar conflictos al hacer push.
 | Clima | Open-Meteo |
 | Reconocimiento de voz | `expo-speech-recognition` (`es-MX`) |
 | Confirmación por voz | `expo-speech` |
+| Cifrado de los registros | AES-256-GCM (Windows) y RSA-OAEP 2048 + AES-256-GCM (Linux) con `node:crypto`; herramientas en Python con `cryptography` |
 | Verificación en dos pasos | TOTP (RFC 6238) con `node:crypto`, compatible con Google Authenticator y Microsoft Authenticator; QR con `qrcode` |
 | Inteligencia de Barbie | Gemini (`gemini-3.8-flash`, API REST `generateContent`) |
 | Servicio web (ambos servidores) | Node.js + Express |
@@ -96,6 +98,9 @@ server-linux/           Servicio web del Servidor 2 (Ubuntu Server + PostgreSQL)
 docs/                   Documentación y reporte PDF
   pasos-cliente.md      Pasos para conectar la app con los dos servidores
   probar-servidores.sh  Diagnóstico: ¿están listos los servidores?
+  actividad2-cifrado.md Actividad 2 del Parcial 2: cifrado AES y RSA, claves y pruebas
+practicas-python/       Programas de clase (rsa_seguridad.py, aes_seguridad.py) y herramientas
+                        del cifrado: generar claves, descifrar un registro y demostración
 ```
 
 ## Cliente: instalación y ejecución
@@ -356,7 +361,9 @@ Además de `x-api-key`, llevan el header `Authorization: Bearer <token>`. Sin é
 - **Quién guarda** (`Usuario`, `Nombre`, `Paterno`, `Materno`) lo pone el servidor a partir del token; lo que mande la app en esos campos se ignora. Así nadie puede guardar a nombre de otro.
 - Los datos del clima son opcionales, para poder guardar uno solo ("Barbie, guarda solo la temperatura"). `latitud` y `longitud` van juntas o ninguna. `FechaHora` la pone la base de datos.
 
-`GET /api/clima?limite=50&usuario=haideni&lugar=pachuca&desde=2026-10-01&hasta=2026-10-05`: todos los filtros son opcionales. `lugar` busca en municipio o estado, y las fechas son `AAAA-MM-DD`, incluidas. Responde `{ "ok": true, "servidor": "linux", "total": 12, "registros": [ … ] }`, donde `total` cuenta los que cumplen los filtros.
+Los datos del clima (de `estado` a `viento`) se guardan cifrados en la columna `Cifrado`: con AES-256-GCM en Windows y con AES + RSA en Linux (ver [`docs/actividad2-cifrado.md`](docs/actividad2-cifrado.md)). La app los manda y los recibe en claro.
+
+`GET /api/clima?limite=50&usuario=haideni&lugar=pachuca&desde=2026-10-01&hasta=2026-10-05`: todos los filtros son opcionales. `lugar` busca en municipio o estado, y las fechas son `AAAA-MM-DD`, incluidas. Responde `{ "ok": true, "servidor": "linux", "total": 12, "registros": [ … ] }`, donde `total` cuenta los que cumplen los filtros. Cada registro trae `"protegido": true` si estaba cifrado en la BD, o `false` si es anterior al cifrado. Si el cifrado fue alterado, el registro llega con `"alterado": true` y los datos del clima en `null`.
 
 | Código | Cuándo |
 |---|---|
@@ -469,9 +476,14 @@ Las dos VMs están en computadoras distintas y el celular debe alcanzar ambas.
 - Quién guarda cada registro sale del token, no del cuerpo de la petición: no se puede guardar a nombre de otro.
 - Usuario de BD `upp_api` con permisos mínimos (`INSERT` y `SELECT` sobre `Georreferencia`, `Usuarios` y `Bitacora`, más `UPDATE` solo de las columnas `Usuarios.Contrasena` y `Usuarios.Secreto2FA` para restablecer la contraseña y vincular el 2FA), nunca `sa` ni `postgres`. No puede borrar ni modificar registros, logs ni ningún otro dato de las cuentas.
 - Las peticiones con datos inválidos se rechazan con `400` antes de llegar a la BD.
+- **Registros del clima cifrados en la BD:**
+  - En Windows, con AES-256-GCM y la clave `CLAVE_AES` del `.env`.
+  - En Linux, con cifrado híbrido: cada registro tiene su propia clave AES, protegida con la clave pública RSA de 2048 bits (OAEP-SHA256). La clave privada vive en `/opt/clima-api/claves/privada.pem`.
+  - Una consulta directa solo muestra el texto cifrado, y la etiqueta GCM detecta cualquier alteración.
+  - El manejo de claves y las limitaciones están en [`docs/actividad2-cifrado.md`](docs/actividad2-cifrado.md).
 - En Ubuntu, el servicio corre con un usuario de sistema sin shell y con el endurecimiento de systemd (`NoNewPrivileges`, `ProtectSystem`).
 - **Pendiente:** hoy las dos bases de datos **sí** están expuestas a la red ZeroTier. Comprobado: PostgreSQL escucha en `0.0.0.0:5432` con `ufw` desactivado, y el `1433` de SQL Server acepta conexiones desde la red del equipo (regla heredada de la Actividad 2). Las dos deben quedar solo para `localhost` o para la red interna de cada VM antes de entregar.
-- Credenciales, API key y `TOKEN_SECRET` en `.env`, que no se sube al repo. `TOKEN_SECRET` vive solo en los servidores, nunca en la app.
+- Credenciales, API key, `TOKEN_SECRET` y `CLAVE_AES` en `.env`, y la clave privada RSA en `claves/`. Ninguno se sube al repo. `TOKEN_SECRET` vive solo en los servidores, nunca en la app.
 - Limitación conocida del 2FA: la app autenticadora se vincula en el primer inicio de sesión, así que quien conozca la contraseña de una cuenta que todavía no la vinculó podría vincular la suya.
 - Limitación conocida: las variables `EXPO_PUBLIC_*` quedan dentro de la app, así que la API key del cliente se puede extraer del APK.
 

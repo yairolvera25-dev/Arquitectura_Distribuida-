@@ -9,6 +9,10 @@ $envArchivo = Join-Path $carpeta '.env'
 if (-not (Test-Path $envArchivo) -or -not (Select-String -Path $envArchivo -Pattern '^TOKEN_SECRET=.{32,}' -Quiet)) {
   throw "Falta TOKEN_SECRET (mínimo 32 caracteres) en $envArchivo. Pídela a quien la generó y agrégala antes de seguir."
 }
+# ... y CLAVE_AES (cifra los registros del clima). 32 bytes en Base64 son 44 caracteres.
+if (-not (Select-String -Path $envArchivo -Pattern '^CLAVE_AES=[A-Za-z0-9+/]{43}=' -Quiet)) {
+  throw "Falta CLAVE_AES en $envArchivo. Genérala UNA sola vez con: node -e `"console.log(require('crypto').randomBytes(32).toString('base64'))`" y agrégala como CLAVE_AES=..."
+}
 
 # 1. Firewall: puerto 3000 abierto solo para la red ZeroTier del equipo.
 if (-not (Get-NetFirewallRule -DisplayName 'API Clima UPP 3000' -ErrorAction SilentlyContinue)) {

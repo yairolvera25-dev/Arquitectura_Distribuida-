@@ -111,6 +111,8 @@ sudo -u postgres psql -q -d UPP -f - < "$DESTINO/sql/04_bitacora.sql"
 ok "Tabla Bitacora lista (respaldo de los logs de la app)"
 sudo -u postgres psql -q -d UPP -f - < "$DESTINO/sql/05_2fa.sql"
 ok "Columna Secreto2FA lista (verificación en dos pasos con TOTP)"
+sudo -u postgres psql -q -d UPP -f - < "$DESTINO/sql/06_cifrado.sql"
+ok "Columna Cifrado lista (registros del clima cifrados con AES + RSA)"
 
 # ----------------------------------------------------------- 7. Configuración
 paso "Configuración (.env)"
@@ -125,6 +127,11 @@ if [[ -f $DESTINO/.env && $RECONFIGURAR != "--reconfigurar" ]]; then
     sed -i '/^TOKEN_SECRET=/d' "$DESTINO/.env"
     printf 'TOKEN_SECRET="%s"\n' "$TOKEN_SECRET" >> "$DESTINO/.env"
     ok "TOKEN_SECRET agregada al .env"
+  fi
+  # Instalaciones anteriores al cifrado de los registros no tienen RSA_CLAVE_PRIVADA: se agrega.
+  if ! grep -q '^RSA_CLAVE_PRIVADA=' "$DESTINO/.env"; then
+    echo 'RSA_CLAVE_PRIVADA=claves/privada.pem' >> "$DESTINO/.env"
+    ok "RSA_CLAVE_PRIVADA agregada al .env"
   fi
 else
   # Solo el valor sale por stdout; los mensajes van a la terminal, porque la
@@ -170,11 +177,26 @@ DB_PORT=5432
 DB_NAME=UPP
 DB_USER=upp_api
 DB_PASSWORD="$DB_PASSWORD"
+RSA_CLAVE_PRIVADA=claves/privada.pem
 CORS_ORIGINS=
 ENV
   )
   ok ".env escrito"
 fi
+
+# ------------------------------------------------------ 7b. Claves RSA
+paso "Claves RSA de los registros del clima"
+
+# Se genera una sola vez: si se reemplaza, los registros ya cifrados no se pueden volver a leer.
+if [[ -f $DESTINO/claves/privada.pem ]]; then
+  ok "Ya existe claves/privada.pem; la dejo como está"
+else
+  mkdir -p "$DESTINO/claves"
+  (umask 077; openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$DESTINO/claves/privada.pem" 2>/dev/null)
+  ok "Clave privada RSA de 2048 bits generada en $DESTINO/claves/privada.pem"
+fi
+openssl pkey -in "$DESTINO/claves/privada.pem" -pubout -out "$DESTINO/claves/publica.pem"
+ok "Clave pública en $DESTINO/claves/publica.pem (esa sí se puede compartir)"
 
 # -------------------------------------------------------------- 8. Permisos
 paso "Permisos"
@@ -182,6 +204,8 @@ paso "Permisos"
 chown -R root:"$USUARIO" "$DESTINO"
 chmod 750 "$DESTINO"
 chmod 640 "$DESTINO/.env"
+chmod 750 "$DESTINO/claves"
+chmod 640 "$DESTINO/claves/privada.pem"
 ok "El código es de root; $USUARIO solo puede leerlo"
 
 # --------------------------------------------------------------- 9. Servicio

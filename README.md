@@ -7,7 +7,7 @@ Examen Parcial 1 de Seguridad Informática (Universidad Politécnica de Pachuca)
 | Componente | Estado |
 |---|---|
 | `client/` | Código listo, con verificación en dos pasos (2FA con TOTP) |
-| `server-windows/` | Instalado en `10.191.84.109:3000`, pero **le falta el inicio de sesión y el 2FA**: responde `404` en `/api/auth` (ver *Actualizar los servidores*) |
+| `server-windows/` | Instalado en `10.191.84.109:3000`, con inicio de sesión y 2FA. Comprobado el 22 de octubre de 2026: registro (`201`), login y `/api/auth/2fa` (`200`) desde la app |
 | `server-linux/` | Instalado en `10.191.84.219:3000`; **falta actualizarlo para el 2FA** (ver *Actualizar los servidores*) |
 | `docs/` | `pasos-cliente.md` y `probar-servidores.sh` listos; falta el reporte PDF |
 
@@ -109,6 +109,8 @@ docs/                   Documentación y reporte PDF
 
 La app no funciona en Expo Go, porque el reconocimiento de voz usa código nativo. Hay que compilar un development build.
 
+Para probar sin Android Studio ni teléfono basta con Node.js: la app también corre en el navegador (ver *En el navegador*).
+
 ### Instalación
 
 ```bash
@@ -152,6 +154,18 @@ Las veces siguientes, con la app ya instalada:
 npx expo start
 ```
 
+### En el navegador
+
+```bash
+npx expo start --web
+```
+
+Abre `http://localhost:8081`. La computadora tiene que estar en ZeroTier para alcanzar los servidores.
+
+- Usa **Chrome o Chromium**: la voz usa la Web Speech API, que Firefox no tiene.
+- Acepta los permisos de ubicación y micrófono. En `localhost` funcionan aunque no sea https.
+- Si sale `react-native-web is not installed`, el `node_modules` está desactualizado: corre `npm install`.
+
 ### Uso
 
 1. Al abrir la app, acepta el permiso de ubicación. Se muestra el clima actual.
@@ -179,6 +193,7 @@ npx expo-doctor       # revisa dependencias y configuración
 | "Se acabó la cuota gratis de Gemini" | Límite por minuto del plan gratuito; espera un poco. Mientras, "Barbie, guarda en el servidor uno" sigue funcionando |
 | "Código de verificación incorrecto" con el código bueno | El reloj del teléfono o de la VM está desfasado más de 30 s: activa la hora automática en el teléfono y sincroniza la VM |
 | "El servidor uno/dos no tiene vinculada tu app autenticadora" (en la bitácora) | Ese servidor estaba apagado cuando se vinculó la app; restablece la contraseña con el código de recuperación y vuelve a entrar con los dos encendidos |
+| "Se necesita el permiso de ubicación" en el navegador | El navegador bloqueó la ubicación para `localhost`: en el ícono a la izquierda de la dirección pon *Ubicación → Permitir* y recarga |
 | La app no abre en Expo Go | Es lo esperado; usa `npx expo run:android` |
 | `SDK location not found` al compilar | Falta definir `ANDROID_HOME` |
 
@@ -452,7 +467,7 @@ Las dos VMs están en computadoras distintas y el celular debe alcanzar ambas.
 - **Verificación en dos pasos (2FA)** con TOTP de 6 dígitos (Google Authenticator o Microsoft Authenticator), validada en cada servidor: sin el código no hay sesión. Secreto cifrado con AES-256-GCM en la base, códigos vencidos o reutilizados rechazados, y el token pendiente del primer paso no abre ninguna otra ruta.
 - **Cerrar sesión** revoca el token en cada servidor (`/api/auth/salir`), no solo lo borra de la app. La lista de revocados vive en memoria, así que se pierde si el servicio se reinicia.
 - Quién guarda cada registro sale del token, no del cuerpo de la petición: no se puede guardar a nombre de otro.
-- Usuario de BD `upp_api` con permisos mínimos (`INSERT` y `SELECT` sobre `Georreferencia`, `Usuarios` y `Bitacora`, más `UPDATE` solo de la columna `Usuarios.Contrasena` para restablecerla), nunca `sa` ni `postgres`. No puede borrar ni modificar registros, logs ni ningún otro dato de las cuentas.
+- Usuario de BD `upp_api` con permisos mínimos (`INSERT` y `SELECT` sobre `Georreferencia`, `Usuarios` y `Bitacora`, más `UPDATE` solo de las columnas `Usuarios.Contrasena` y `Usuarios.Secreto2FA` para restablecer la contraseña y vincular el 2FA), nunca `sa` ni `postgres`. No puede borrar ni modificar registros, logs ni ningún otro dato de las cuentas.
 - Las peticiones con datos inválidos se rechazan con `400` antes de llegar a la BD.
 - En Ubuntu, el servicio corre con un usuario de sistema sin shell y con el endurecimiento de systemd (`NoNewPrivileges`, `ProtectSystem`).
 - **Pendiente:** hoy las dos bases de datos **sí** están expuestas a la red ZeroTier. Comprobado: PostgreSQL escucha en `0.0.0.0:5432` con `ufw` desactivado, y el `1433` de SQL Server acepta conexiones desde la red del equipo (regla heredada de la Actividad 2). Las dos deben quedar solo para `localhost` o para la red interna de cada VM antes de entregar.
